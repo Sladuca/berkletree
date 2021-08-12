@@ -15,10 +15,12 @@ use ark_bls12_381::{
 };
 use ark_poly::univariate::DensePolynomial;
 use blake3::{
-	Hasher as Blake3Hasher,
-	Hash as Blake3Hash
+	Hash as Blake3Hash,
 };
 use bitvec::vec::BitVec;
+
+#[cfg(test)]
+mod test_utils;
 
 pub(crate) type ECEngine = Bls12<ECParams>;
 
@@ -164,7 +166,6 @@ impl<K, V, const Q: usize> BerkleTree<K, V, Q>
 where
 	K: Ord + Clone,
 {
-	/// 
 	pub fn new() -> Self {
 		unimplemented!()
 	}
@@ -189,27 +190,107 @@ where
 		unimplemented!()
 	}
 
-	pub fn get(&self, key: K) -> GetResult<K, V> {
+	pub fn get(&self, key: &K) -> GetResult<K, V> {
 		unimplemented!()
 	} 
 
-	pub fn get_no_proof(&self, key: K) -> Option<V> {
+	pub fn get_no_proof(&self, key: &K) -> Option<V> {
 		unimplemented!()
 	}
 
-	pub fn contains_key(&self, key: K) -> ContainsResult<K, V> {
+	pub fn contains_key(&self, key: &K) -> ContainsResult<K, V> {
 		unimplemented!()
 	}
 
-	pub fn contains_key_no_proof(&self, key: K) -> bool {
+	pub fn contains_key_no_proof(&self, key: &K) -> bool {
 		unimplemented!()
 	}
 
-	pub fn range(&self, left: K, right: K) -> RangeResult<K, V, Q> {
+	pub fn range(&self, left: &K, right: &K) -> RangeResult<K, V, Q> {
 		unimplemented!()
 	}
 
-	pub fn range_no_proof(&self, key: K) -> RangeIter<K, V, Q> {
+	pub fn range_no_proof(&self, key: &K) -> RangeIter<K, V, Q> {
 		unimplemented!()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use test_utils::*;
+	use std::fmt::Debug;
+	use fastrand::Rng;
+
+	const RAND_SEED: u64 = 42;
+
+	fn make_tree<K: Ord + Clone + Debug, V, const Q: usize>(items: Vec<(K, V, Blake3Hash)>) -> BerkleTree<K, V, Q> {
+		let mut tree: BerkleTree<K, V, Q> = BerkleTree::new();
+		tree.bulk_insert_no_proof(items);
+		tree
+	}
+
+
+	#[test]
+	fn test_non_bulk_only_root_no_proof() {
+		let mut tree: BerkleTree<i32, String, 11> = BerkleTree::new();
+		let keys: Vec<i32> = (0..1000).step_by(10).collect();
+
+		// ordered insert, oredered get
+		for &i in keys.iter() {
+			let s = i.to_string();
+			let hash = blake3::hash(s.as_bytes());
+			tree.insert_no_proof(i, s, hash);
+		}
+
+		for &i in keys.iter() {
+			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i.to_string());
+		}
+
+		let rng = Rng::with_seed(RAND_SEED);
+		let mut keys_shuffled = keys.clone();
+		
+		// ordered insert, unordered get
+		for &i in keys.iter() {
+			let s = i.to_string();
+			let hash = blake3::hash(s.as_bytes());
+			tree.insert_no_proof(i, s, hash);
+		}
+
+		rng.shuffle(&mut keys_shuffled);
+
+		for &i in keys_shuffled.iter() {
+			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i.to_string());
+		}
+
+		// unordered insert, ordered get
+		rng.shuffle(&mut keys_shuffled);
+		for &i in keys_shuffled.iter() {
+			let s = i.to_string();
+			let hash = blake3::hash(s.as_bytes());
+			tree.insert_no_proof(i, s, hash);
+		}
+
+
+		for &i in keys.iter() {
+			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i.to_string());
+		}
+
+		// unordered insert, unordered get
+		rng.shuffle(&mut keys_shuffled);
+		for &i in keys_shuffled.iter() {
+			let s = i.to_string();
+			let hash = blake3::hash(s.as_bytes());
+			tree.insert_no_proof(i, s, hash);
+		}
+
+		for &i in keys.iter() {
+			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i.to_string());
+		}
+		
 	}
 }
