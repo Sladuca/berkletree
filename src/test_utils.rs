@@ -2,11 +2,11 @@
 use std::fmt::Debug;
 use crate::*;
 
-pub(crate) fn assert_is_b_tree<K: Ord + Clone + Debug, V, const Q: usize>(root: &Node<K, V, Q>) {
+pub(crate) fn assert_is_b_tree<const Q: usize>(root: &Node<Q>) {
 	assert_is_b_tree_inner(root, (None, None), 0)
 }
 
-pub(crate) fn assert_is_b_tree_inner<K: Ord + Clone + Debug, V, const Q: usize>(node: &Node<K, V, Q>, parent_keys: (Option<&K>, Option<&K>), level: usize) {
+pub(crate) fn assert_is_b_tree_inner<const Q: usize>(node: &Node<Q>, parent_keys: (Option<&[u8]>, Option<&[u8]>), level: usize) {
 	let (left_parent_key, right_parent_key) = parent_keys;
 
 	match node {
@@ -27,7 +27,7 @@ pub(crate) fn assert_is_b_tree_inner<K: Ord + Clone + Debug, V, const Q: usize>(
 			node.keys.iter().for_each(|key| match (left_parent_key, right_parent_key) {
 				(Some(left), Some(right)) => {
 					assert_at_node(
-						key >= left && key < right,
+						key.as_ref() >= left && key.as_ref() < right,
 						left_parent_key,
 						level,
 						format!("key {:#?} < left parent key {:#?} or >= right parent key {:#?}", key, left, right)
@@ -35,7 +35,7 @@ pub(crate) fn assert_is_b_tree_inner<K: Ord + Clone + Debug, V, const Q: usize>(
 				},
 				(Some(left), None) => {
 					assert_at_node(
-						key >= left,
+						key.as_ref() >= left,
 						left_parent_key,
 						level,
 						format!("key {:#?} < left parent key {:#?}", key, left)
@@ -44,7 +44,7 @@ pub(crate) fn assert_is_b_tree_inner<K: Ord + Clone + Debug, V, const Q: usize>(
 				},
 				(None, Some(right)) => {
 					assert_at_node(
-						key < right,
+						key.as_ref() < right,
 						left_parent_key,
 						level,
 						format!("key {:#?} >= right parent key {:#?}", key, right)
@@ -72,16 +72,16 @@ pub(crate) fn assert_is_b_tree_inner<K: Ord + Clone + Debug, V, const Q: usize>(
 					);
 				} else if i == 0 {
 					// case where it's the 0th but not the last child
-					let right = &node.keys[i];
+					let right = node.keys[i].as_ref();
 					assert_is_b_tree_inner(child, (None, Some(right)), level + 1);
 				} else if i == node.keys.len() {
 					// case where it's the last child
-					let left = &node.keys[i-1];
+					let left = node.keys[i-1].as_ref();
 					assert_is_b_tree_inner(child, (Some(left), None), level + 1);
 				} else {
 					// case where it's neither the first nor the last child
-					let left = &node.keys[i-1];
-					let right = &node.keys[i];
+					let left = node.keys[i-1].as_ref();
+					let right = node.keys[i].as_ref();
 					assert_is_b_tree_inner(child, (Some(left), Some(right)), level + 1);
 				}
 			});
@@ -120,7 +120,7 @@ pub(crate) fn is_sorted<T: Ord>(items: &Vec<T>) -> bool {
 	is_sorted
 }
 
-pub(crate) fn assert_at_node<K: Debug>(cond: bool, left_parent_key: Option<&K>, level: usize, msg: String) {
+pub(crate) fn assert_at_node(cond: bool, left_parent_key: Option<&[u8]>, level: usize, msg: String) {
 	assert!(
 		cond,
 		format!("In node with parent key {:#?} at level {}: {}", left_parent_key, level, msg)

@@ -1,19 +1,19 @@
-use std::cmp::Ord;
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use ark_poly_commit::kzg10::{
-	UniversalParams,
-	KZG10,
-	Commitment,
-	Proof
+use std::{
+	cell::RefCell,
+	rc::Rc,
 };
-use ark_ec::bls12::Bls12;
-use ark_bls12_381::{
-	Parameters as ECParams,
-	Fr as ECScalarField
+use kzg::{
+	KZGParams,
+	KZGProver,
+	KZGWitness,
+	KZGBatchWitness,
+	KZGCommitment,
+	polynomial::Polynomial
 };
-use ark_poly::univariate::DensePolynomial;
+use bls12_381::{
+	Bls12,
+	Scalar
+};
 use blake3::{
 	Hash as Blake3Hash,
 };
@@ -22,195 +22,248 @@ use bitvec::vec::BitVec;
 #[cfg(test)]
 mod test_utils;
 
-pub(crate) type ECEngine = Bls12<ECParams>;
+pub type Offset = usize;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Polynomial(DensePolynomial<ECScalarField>);
+/// this wrapper struct denotes a hash that lies in Bls12_381's Scalar Field
+/// it is computed by chopping off the two most-significant bits of the hash
+/// A field hash should not be constructed directly, only from a Blake3hash
+// INVARIANT: LE interpretation of the bytes always < Bls12_281 modulus
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct FieldHash([u8; 32]);
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PolynomialCommitment(Commitment<ECEngine>);
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Witness(Proof<ECEngine>);
-
-mod serialize;
-
-/// High level struct that user interacts with
-pub struct BerkleTree<K, V, const Q: usize>
-where
-	K: Ord + Clone,
-{
-	parameters: UniversalParams<ECEngine>,
-	scheme: KZG10<ECEngine, DensePolynomial<ECScalarField>>,
-	root: Rc<RefCell<Node<K, V, Q>>>
-}
-
-/// enum reprenting the different kinds of nodes for
-#[derive(Debug, Clone, PartialEq)]
-enum Node<K, V, const Q: usize> 
-where
-	K: Ord + Clone
-{
-    Internal {
-		hash: Blake3Hash,
-		node: InternalNode<K, V, Q>,
-	},
-	Leaf {
-		hash: Blake3Hash,
-		node: LeafNode<K, V, Q>,
+impl From<Blake3Hash> for FieldHash {
+	fn from(inner: Blake3Hash) -> Self {
+		let mut inner: [u8; 32] = inner.into();
+		inner[31] &= 0x4F;
+		FieldHash(inner)
 	}
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct InternalNode<K, V, const Q: usize>
-where
-	K: Ord + Clone,
-{
-	children: Vec<Node<K, V, Q>>,
-	keys: Vec<K>,
-	// witnesses are lazily-computed - none if any particular witness hasn't been computed yet.
-	witnesses: Vec<Option<Witness>>,
-	polynomial: Polynomial,
-	commitment: PolynomialCommitment
+impl From<Scalar> for FieldHash {
+	fn from(inner: Scalar) -> Self {
+		let inner = inner.to_bytes();
+		FieldHash(inner)
+	}
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct LeafNode<K, V, const Q: usize>
-where
-	K: Ord + Clone,
+impl Into<Scalar> for FieldHash {
+	fn into(self) -> Scalar {
+		// unwrap OK because invariant guarantees self to be < modulus
+		Scalar::from_bytes(&self.0).unwrap()
+	}
+}
+
+/// High level struct that user interacts with
+/// Q is the branching factor of the tree. More specifically, nodes can have at most Q - 1 keys.
+pub struct BerkleTree<const Q: usize>
 {
-	values: Vec<V>,
-	keys: Vec<K>,
-	hashes: Vec<Blake3Hash>,
-	witnesses: Vec<Option<Witness>>,
-	polynomial: Polynomial,
-	commitment: PolynomialCommitment
-    
+	params: KZGParams<Bls12, Q>,
+	root: Rc<RefCell<Node<Q>>>
+}
+
+/// enum reprenting the different kinds of nodes for
+#[derive(Clone)]
+enum Node<const Q: usize>
+{
+    Internal {
+		hash: FieldHash,
+		node: InternalNode<Q>,
+	},
+	Leaf {
+		hash: FieldHash,
+		node: LeafNode<Q>,
+	}
+}
+
+#[derive(Clone)]
+pub(crate) struct InternalNode<const Q: usize>
+{
+	children: Vec<Node<Q>>,
+	keys: Vec<Box<[u8]>>,
+	// witnesses are lazily-computed - none if any particular witness hasn't been computed yet.
+	witnesses: Vec<Option<KZGWitness<Bls12>>>,
+	batch_witness: KZGBatchWitness<Bls12, Q>,
+	prover: KZGProver<Bls12, Q>
+}
+
+#[derive(Clone)]
+pub(crate) struct LeafNode<const Q: usize>
+{
+	keys: Vec<Box<[u8]>>,
+	offsets: Vec<Offset>,
+	hashes: Vec<FieldHash>,
+	witnesses: Vec<Option<KZGWitness<Bls12>>>,
+	prover: KZGProver<Bls12, Q>
     // no next / prev pointers here since we need to traverse the tree up/down
     // anyways to get a range proof
 }
 
-pub struct KVProof<K, V> {
-	idx: usize,
-	key: K,
-	value: V,
-	witness: Witness,
-}
-
-// TODO
-pub struct MembershipProof<K, V> {
-	commitments: Vec<PolynomialCommitment>,
-	path: Vec<KVProof<K, V>>
-}
-
-// TODO
-pub enum NonMembershipProof<K, V> {
-	IntraNode {
-		commitments: Vec<PolynomialCommitment>,
-		path_to_left: Vec<KVProof<K, V>>,
-		right: KVProof<K,V>
-	},
-	InterNode {
-		common_path: Option<Vec<KVProof<K, V>>>,
-		common_commitments: Option<Vec<PolynomialCommitment>>,
-
-		left_path: Vec<KVProof<K, V>>,
-		left_commitments: Vec<PolynomialCommitment>,
-
-		right_path: Vec<KVProof<K, V>>,
-		right_commitments: Vec<PolynomialCommitment>,
+impl<const Q: usize> LeafNode<Q> {
+	fn new_from_prover(mut prover: KZGProver<Bls12, Q>) -> Self {
+		let polynomial = Polynomial::new_zero();
+		prover.commit(polynomial);
+		LeafNode {
+			offsets: Vec::with_capacity(Q),
+			keys: Vec::with_capacity(Q),
+			hashes: Vec::with_capacity(Q),
+			witnesses: Vec::with_capacity(Q),
+			prover: prover
+		}
 	}
 }
 
-pub enum RangePath<K, V> {
-	KeyExists(MembershipProof<K, V>),
-	KeyDNE(NonMembershipProof<K, V>)
+pub struct KVProof {
+	idx: usize,
+	witness: KZGWitness<Bls12>,
+}
+
+pub struct InnerNodeProof<'a> {
+	idx: usize,
+	key: &'a [u8],
+	child_hash: FieldHash,
+	witness: KZGWitness<Bls12>,
+}
+
+
+pub struct MembershipProof<'a> {
+	commitments: Vec<KZGCommitment<Bls12>>,
+	path: Vec<InnerNodeProof<'a>>,
+	leaf: KVProof
+}
+
+pub enum NonMembershipProof<'a> {
+	/// path_to_leaf.len() == commitments.len() - 1. The last commitment is for the leaf node
+	IntraNode {
+		commitments: Vec<KZGCommitment<Bls12>>,
+		path_to_leaf: Vec<InnerNodeProof<'a>>,
+
+		left: KVProof,
+		right: KVProof
+	},
+	InterNode {
+		common_path: Option<Vec<InnerNodeProof<'a>>>,
+		common_commitments: Option<Vec<KZGCommitment<Bls12>>>,
+
+		left: KVProof,
+		left_commitment: KZGCommitment<Bls12>,
+
+		right: KVProof,
+		right_commitment: KZGCommitment<Bls12>
+	}
+}
+
+pub enum RangePath<'a> {
+	KeyExists(MembershipProof<'a>),
+	KeyDNE(NonMembershipProof<'a>)
 }
 
 // TODO
-pub struct RangeProof<K, V> {
-	left_path: RangePath<K, V>,
-	right_path: RangePath<K, V>,
+pub struct RangeProof<'a> {
+	left_path: RangePath<'a>,
+	right_path: RangePath<'a>,
 	bitvecs: Vec<BitVec>,
 }
 
-pub enum GetResult<K, V> {
-	Found(V, MembershipProof<K, V>),
-	NotFound(V, NonMembershipProof<K, V>)
+pub enum GetResult<'a> {
+	Found(Offset, MembershipProof<'a>),
+	NotFound(NonMembershipProof<'a>)
 }
 
-pub enum ContainsResult<K, V> {
-	Found(MembershipProof<K, V>),
-	NotFound(NonMembershipProof<K, V>),
+pub enum ContainsResult<'a> {
+	Found(MembershipProof<'a>),
+	NotFound(NonMembershipProof<'a>),
 }
 
-pub struct RangeResult<'a, K, V, const Q: usize>
+pub struct RangeResult<'a, const Q: usize>
 where
-	K: Ord + Clone
 {
-	proof: RangeProof<K, V>,
-	iter: RangeIter<'a, K, V, Q>
+	proof: RangeProof<'a>,
+	iter: RangeIter<'a, Q>
 }
 
-pub struct RangeIter<'a, K, V, const Q: usize>
-where
-	K: Ord + Clone
+pub struct RangeIter<'a, const Q: usize>
 {
-	left_path: Vec<K>,
-	right_path: Vec<K>,
-	root: &'a Node<K, V, Q>
+	left_path: Vec<&'a [u8]>,
+	right_path: Vec<&'a [u8]>,
+	root: Rc<RefCell<Node<Q>>>,
+	current_key: &'a [u8]
 }
 
-
-impl<K, V, const Q: usize> BerkleTree<K, V, Q>
-where
-	K: Ord + Clone,
+impl<const Q: usize> BerkleTree<Q>
 {
-	pub fn new() -> Self {
+	pub fn new_with_params(params: KZGParams<Bls12, Q>) -> Self {
+		let prover = KZGProver::new(params);
+		let root_leaf = LeafNode::new_from_prover(prover);
 		unimplemented!()
 	}
 
-	pub fn new_with_params(params: UniversalParams<ECEngine>) -> Self {
+	pub fn insert<'a, K>(&mut self, key: K, value: Offset, hash: Blake3Hash) -> MembershipProof<'a> 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn insert(&mut self, key: K, value: V, hash: Blake3Hash) -> MembershipProof<K, V> {
+	pub fn insert_no_proof<K>(&mut self, key: K, value: Offset, hash: Blake3Hash) 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn insert_no_proof(&mut self, key: K, value: V, hash: Blake3Hash) {
+	pub fn bulk_insert<'a, K>(&mut self, entries: Vec<(K, Offset, Blake3Hash)>) -> Vec<MembershipProof<'a>> 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn bulk_insert(&mut self, entries: Vec<(K, V, Blake3Hash)>) -> Vec<MembershipProof<K, V>> {
+	pub fn bulk_insert_no_proof<K>(&mut self, entries: Vec<(K, Offset, Blake3Hash)>) 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn bulk_insert_no_proof(&mut self, entries: Vec<(K, V, Blake3Hash)>) {
-		unimplemented!()
-	}
-
-	pub fn get(&self, key: &K) -> GetResult<K, V> {
+	pub fn get<'a, K>(&self, key: &K) -> GetResult<'a> 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	} 
 
-	pub fn get_no_proof(&self, key: &K) -> Option<V> {
+	pub fn get_no_proof<K>(&self, key: &K) -> Option<Offset>
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn contains_key(&self, key: &K) -> ContainsResult<K, V> {
+	pub fn contains_key<'a, K>(&self, key: &K) -> ContainsResult<'a> 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn contains_key_no_proof(&self, key: &K) -> bool {
+	pub fn contains_key_no_proof<K>(&self, key: &K) -> bool 
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn range(&self, left: &K, right: &K) -> RangeResult<K, V, Q> {
+	pub fn range<'a, K>(&self, left: &K, right: &K) -> RangeResult<'a, Q>
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 
-	pub fn range_no_proof(&self, key: &K) -> RangeIter<K, V, Q> {
+	pub fn range_no_proof<'a, K>(&self, key: &K) -> RangeIter<'a, Q>
+	where
+		K: AsRef<[u8]>
+	{
 		unimplemented!()
 	}
 }
@@ -224,72 +277,91 @@ mod tests {
 
 	const RAND_SEED: u64 = 42;
 
-	fn make_tree<K: Ord + Clone + Debug, V, const Q: usize>(items: Vec<(K, V, Blake3Hash)>) -> BerkleTree<K, V, Q> {
-		let mut tree: BerkleTree<K, V, Q> = BerkleTree::new();
+	fn test_setup<const Q: usize>() -> KZGParams<Bls12, Q> {
+		let rng = Rng::with_seed(420);
+		let s: Scalar = rng.u64(0..u64::MAX).into();
+		kzg::setup(s)
+	}
+
+	fn make_tree<K, const Q: usize>(items: Vec<(K, Offset, Blake3Hash)>) -> BerkleTree<Q>
+	where
+		K: AsRef<[u8]> + Debug
+	{
+		let params = test_setup();
+		let mut tree: BerkleTree<Q> = BerkleTree::new_with_params(params);
 		tree.bulk_insert_no_proof(items);
 		tree
 	}
 
-
 	#[test]
 	fn test_non_bulk_only_root_no_proof() {
-		let mut tree: BerkleTree<i32, String, 11> = BerkleTree::new();
-		let keys: Vec<i32> = (0..1000).step_by(10).collect();
+		let params = test_setup();
+		let mut tree: BerkleTree<11> = BerkleTree::new_with_params(params.clone());
+
+		let keys: Vec<usize> = (0..1000).step_by(10).collect();
 
 		// ordered insert, oredered get
 		for &i in keys.iter() {
-			let s = i.to_string();
-			let hash = blake3::hash(s.as_bytes());
-			tree.insert_no_proof(i, s, hash);
+			let b = &i.to_le_bytes();
+			let hash = blake3::hash(b);
+			tree.insert_no_proof(b, i, hash);
 		}
 
 		for &i in keys.iter() {
-			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
-			assert_eq!(v, i.to_string());
+			let b = &i.to_le_bytes();
+			let v = tree.get_no_proof(b).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i);
 		}
 
+		let mut tree: BerkleTree<11> = BerkleTree::new_with_params(params.clone());
 		let rng = Rng::with_seed(RAND_SEED);
 		let mut keys_shuffled = keys.clone();
 		
 		// ordered insert, unordered get
 		for &i in keys.iter() {
-			let s = i.to_string();
-			let hash = blake3::hash(s.as_bytes());
-			tree.insert_no_proof(i, s, hash);
+			let b = &i.to_le_bytes();
+			let hash = blake3::hash(b);
+			tree.insert_no_proof(b, i, hash);
 		}
 
 		rng.shuffle(&mut keys_shuffled);
 
 		for &i in keys_shuffled.iter() {
-			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
-			assert_eq!(v, i.to_string());
+			let b = &i.to_le_bytes();
+			let v = tree.get_no_proof(b).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i);
 		}
 
+		let mut tree: BerkleTree<11> = BerkleTree::new_with_params(params.clone());
 		// unordered insert, ordered get
 		rng.shuffle(&mut keys_shuffled);
 		for &i in keys_shuffled.iter() {
-			let s = i.to_string();
-			let hash = blake3::hash(s.as_bytes());
-			tree.insert_no_proof(i, s, hash);
+			let b = &i.to_le_bytes();
+			let hash = blake3::hash(b);
+			tree.insert_no_proof(b, i, hash);
 		}
 
 
 		for &i in keys.iter() {
-			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
-			assert_eq!(v, i.to_string());
+			let b = &i.to_le_bytes();
+			let v = tree.get_no_proof(b).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i);
 		}
 
+		let mut tree: BerkleTree<11> = BerkleTree::new_with_params(params.clone());
 		// unordered insert, unordered get
 		rng.shuffle(&mut keys_shuffled);
 		for &i in keys_shuffled.iter() {
-			let s = i.to_string();
-			let hash = blake3::hash(s.as_bytes());
-			tree.insert_no_proof(i, s, hash);
+			let b = &i.to_le_bytes();
+			let hash = blake3::hash(b);
+			tree.insert_no_proof(b, i, hash);
 		}
 
+		rng.shuffle(&mut keys_shuffled);
 		for &i in keys.iter() {
-			let v = tree.get_no_proof(&i).expect(&format!("could not find key {} in the tree", i));
-			assert_eq!(v, i.to_string());
+			let b = &i.to_le_bytes();
+			let v = tree.get_no_proof(b).expect(&format!("could not find key {} in the tree", i));
+			assert_eq!(v, i);
 		}
 		
 	}
