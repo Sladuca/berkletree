@@ -2,8 +2,8 @@
 use std::fmt::Debug;
 use crate::*;
 
-pub(crate) fn assert_is_b_tree<const Q: usize>(root: &Node<Q>) {
-	assert_is_b_tree_inner(root, (None, None), 0)
+pub(crate) fn assert_is_b_tree<const Q: usize>(tree: &BerkleTree<Q>) {
+	assert_is_b_tree_inner(&tree.root.borrow(), (None, None), 0)
 }
 
 pub(crate) fn assert_is_b_tree_inner<const Q: usize>(node: &Node<Q>, parent_keys: (Option<&[u8]>, Option<&[u8]>), level: usize) {
@@ -123,6 +123,6 @@ pub(crate) fn is_sorted<T: Ord>(items: &Vec<T>) -> bool {
 pub(crate) fn assert_at_node(cond: bool, left_parent_key: Option<&[u8]>, level: usize, msg: String) {
 	assert!(
 		cond,
-		format!("In node with parent key {:#?} at level {}: {}", left_parent_key, level, msg)
+		"In node with parent key {:#?} at level {}: {}", left_parent_key, level, msg
 	);
 }

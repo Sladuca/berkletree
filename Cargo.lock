@@ -21,9 +21,11 @@ dependencies = [
  "bitvec",
  "blake3",
  "bls12_381",
+ "bytes",
  "fastrand",
  "kzg",
  "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -70,6 +72,12 @@ name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
+
+[[package]]
+name = "bytes"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
 
 [[package]]
 name = "cc"
@@ -157,9 +165,9 @@ dependencies = [
 
 [[package]]
 name = "kzg"
-version = "0.1.1"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb6bd88306b9d4a51eb76ba1444a5567788ae9a34b5bae9bad1e1cd55fed81c2"
+checksum = "5f83f4750e22ec555f07f2d430333fba0863f6821cbdcc9e8ffe30a7cd1bbd19"
 dependencies = [
  "pairing",
  "thiserror",
