@@ -7,7 +7,7 @@ pub enum BerkleError {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum NodeConvertError {
+pub enum NodeConvertError {
     #[error("tried to convert non-leaf node into leaf node")]
     NotLeafNode,
     #[error("tried to convert non-internal node into internal node")]

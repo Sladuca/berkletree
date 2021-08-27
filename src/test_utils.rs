@@ -13,7 +13,7 @@ pub(crate) fn assert_is_b_tree_inner<const Q: usize>(
     let (left_parent_key, right_parent_key) = parent_keys;
 
     match node {
-        Node::Internal { hash, node } => {
+        Node::Internal(node) => {
             assert_at_node(
                 is_sorted(&node.keys),
                 left_parent_key,
@@ -63,21 +63,21 @@ pub(crate) fn assert_is_b_tree_inner<const Q: usize>(
                     assert_at_node(false, left_parent_key, level, "only 1 child!".to_string());
                 } else if i == 0 {
                     // case where it's the 0th but not the last child
-                    let right = node.keys[i].as_ref();
+                    let right = node.keys[i + 1].as_ref();
                     assert_is_b_tree_inner(child, (None, Some(right)), level + 1);
-                } else if i == node.keys.len() {
+                } else if i == node.keys.len() - 1 {
                     // case where it's the last child
-                    let left = node.keys[i - 1].as_ref();
+                    let left = node.keys[i].as_ref();
                     assert_is_b_tree_inner(child, (Some(left), None), level + 1);
                 } else {
                     // case where it's neither the first nor the last child
-                    let left = node.keys[i - 1].as_ref();
-                    let right = node.keys[i].as_ref();
+                    let left = node.keys[i].as_ref();
+                    let right = node.keys[i + 1].as_ref();
                     assert_is_b_tree_inner(child, (Some(left), Some(right)), level + 1);
                 }
             });
         }
-        Node::Leaf { node, hash } => {
+        Node::Leaf(node) => {
             assert_at_node(
                 node.keys.len() >= Q / 2,
                 left_parent_key,
