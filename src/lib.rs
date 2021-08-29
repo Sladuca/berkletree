@@ -6,11 +6,11 @@ use kzg::{KZGCommitment, KZGParams, KZGWitness};
 use std::{cell::RefCell, rc::Rc};
 
 pub type Offset = usize;
-
 mod error;
 mod node;
 
 use node::{Node, LeafNode, InternalNode};
+use error::BerkleError;
 
 
 #[cfg(test)]
@@ -47,9 +47,9 @@ impl Into<Scalar> for FieldHash {
 
 /// High level struct that user interacts with
 /// Q is the branching factor of the tree. More specifically, nodes can have at most Q - 1 keys.
-pub struct BerkleTree<'params, const Q: usize> {
+pub struct BerkleTree<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     params: &'params KZGParams<Bls12, Q>,
-    root: Rc<RefCell<Node<'params, Q>>>,
+    root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
 }
 
 pub struct KVProof {
@@ -58,80 +58,80 @@ pub struct KVProof {
     witness: KZGWitness<Bls12>,
 }
 
-pub struct InnerNodeProof {
+pub struct InnerNodeProof<const MAX_KEY_LEN: usize> {
     idx: usize,
-    key: Bytes,
+    key: [u8; MAX_KEY_LEN],
     child_hash: FieldHash,
     witness: KZGWitness<Bls12>,
 }
 
-pub struct MembershipProof {
+pub struct MembershipProof<const MAX_KEY_LEN: usize> {
     commitments: Vec<KZGCommitment<Bls12>>,
-    path: Vec<InnerNodeProof>,
+    path: Vec<InnerNodeProof<MAX_KEY_LEN>>,
     leaf: KVProof,
 }
 
-pub enum NonMembershipProof {
+pub enum NonMembershipProof<const MAX_KEY_LEN: usize> {
     /// path_to_leaf.len() == commitments.len() - 1. The last commitment is for the leaf node
     IntraNode {
         commitments: Vec<KZGCommitment<Bls12>>,
-        path_to_leaf: Vec<InnerNodeProof>,
+        path_to_leaf: Vec<InnerNodeProof<MAX_KEY_LEN>>,
 
-        left_key: Bytes,
+        left_key: [u8; MAX_KEY_LEN],
         left: KVProof,
 
-        right_key: Bytes,
+        right_key: [u8; MAX_KEY_LEN],
         right: KVProof,
     },
     InterNode {
-        common_path: Option<Vec<InnerNodeProof>>,
+        common_path: Option<Vec<InnerNodeProof<MAX_KEY_LEN>>>,
         common_commitments: Option<Vec<KZGCommitment<Bls12>>>,
 
         left: KVProof,
-        left_key: Bytes,
+        left_key: [u8; MAX_KEY_LEN],
         left_commitment: KZGCommitment<Bls12>,
 
         right: KVProof,
-        right_key: Bytes,
+        right_key: [u8; MAX_KEY_LEN],
         right_commitment: KZGCommitment<Bls12>,
     },
 }
 
-pub enum RangePath {
-    KeyExists(MembershipProof),
-    KeyDNE(NonMembershipProof),
+pub enum RangePath<const MAX_KEY_LEN: usize> {
+    KeyExists(MembershipProof<MAX_KEY_LEN>),
+    KeyDNE(NonMembershipProof<MAX_KEY_LEN>),
 }
 
 // TODO
-pub struct RangeProof {
-    left_path: RangePath,
-    right_path: RangePath,
+pub struct RangeProof<const MAX_KEY_LEN: usize> {
+    left_path: RangePath<MAX_KEY_LEN>,
+    right_path: RangePath<MAX_KEY_LEN>,
     bitvecs: Vec<BitVec>,
 }
 
-pub enum GetResult {
-    Found(Offset, MembershipProof),
-    NotFound(NonMembershipProof),
+pub enum GetResult<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
+    Found([u8; MAX_VAL_LEN], MembershipProof<MAX_KEY_LEN>),
+    NotFound(NonMembershipProof<MAX_KEY_LEN>),
 }
 
-pub enum ContainsResult {
-    Found(MembershipProof),
-    NotFound(NonMembershipProof),
+pub enum ContainsResult<const MAX_KEY_LEN: usize> {
+    Found(MembershipProof<MAX_KEY_LEN>),
+    NotFound(NonMembershipProof<MAX_KEY_LEN>),
 }
 
-pub struct RangeResult<'params, const Q: usize> {
-    proof: RangeProof,
-    iter: RangeIter<'params, Q>,
+pub struct RangeResult<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
+    proof: RangeProof<MAX_KEY_LEN>,
+    iter: RangeIter<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
 }
 
-pub struct RangeIter<'params, const Q: usize> {
+pub struct RangeIter<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     left_path: Vec<Bytes>,
     right_path: Vec<Bytes>,
-    root: Rc<RefCell<Node<'params, Q>>>,
+    root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
     current_key: Bytes,
 }
 
-impl<'params, const Q: usize> BerkleTree<'params, Q> {
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
     pub fn new_with_params(params: &'params KZGParams<Bls12, Q>) -> Self {
         assert!(Q > 2, "Branching factor Q must be greater than 2");
 		BerkleTree {
@@ -140,49 +140,59 @@ impl<'params, const Q: usize> BerkleTree<'params, Q> {
 		}
     }
 
-    pub fn insert<K>(&mut self, key: K, value: Offset, hash: Blake3Hash) -> MembershipProof
+    pub fn insert<K, V>(&mut self, key: K, value: V, hash: Blake3Hash) -> Result<MembershipProof<MAX_KEY_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
     {
-		self.root.borrow_mut().insert(key, value, hash)
+        let key = key.as_ref();
+        let value = value.as_ref();
+        if key.len() > MAX_KEY_LEN {
+            Err(BerkleError::KeyTooLong)
+        } else if value.len() > MAX_VAL_LEN {
+            Err(BerkleError::ValueTooLong)
+        } else {
+		    Ok(self.root.borrow_mut().insert(key.as_ref(), value.as_ref(), hash))
+        }
     }
 
-    pub fn insert_no_proof<K>(&mut self, key: K, value: Offset, hash: Blake3Hash)
+    pub fn insert_no_proof<K, V>(&mut self, key: K, value: V, hash: Blake3Hash) -> Result<(), BerkleError>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        unimplemented!()
+    }
+
+    pub fn bulk_insert<K, V>(&mut self, entries: Vec<(K, V, Blake3Hash)>) -> Result<Vec<MembershipProof<MAX_KEY_LEN>>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
         unimplemented!()
     }
 
-    pub fn bulk_insert<K>(&mut self, entries: Vec<(K, Offset, Blake3Hash)>) -> Vec<MembershipProof>
+    pub fn bulk_insert_no_proof<K, V>(&mut self, entries: Vec<(K, V, Blake3Hash)>) -> Result<(), BerkleError>
     where
         K: AsRef<[u8]>,
     {
         unimplemented!()
     }
 
-    pub fn bulk_insert_no_proof<K>(&mut self, entries: Vec<(K, Offset, Blake3Hash)>)
+    pub fn get<K, V>(&self, key: &K) -> Result<GetResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
         unimplemented!()
     }
 
-    pub fn get<K>(&self, key: &K) -> GetResult
+    pub fn get_no_proof<K>(&self, key: &K) -> Result<Option<[u8; MAX_VAL_LEN]>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
         unimplemented!()
     }
 
-    pub fn get_no_proof<K>(&self, key: &K) -> Option<Offset>
-    where
-        K: AsRef<[u8]>,
-    {
-        unimplemented!()
-    }
-
-    pub fn contains_key<K>(&self, key: &K) -> ContainsResult
+    pub fn contains_key<K>(&self, key: &K) -> Result<ContainsResult<MAX_KEY_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
@@ -196,14 +206,14 @@ impl<'params, const Q: usize> BerkleTree<'params, Q> {
         unimplemented!()
     }
 
-    pub fn range<K>(&self, left: &K, right: &K) -> RangeResult<Q>
+    pub fn range<K>(&self, left: &K, right: &K) -> Result<RangeResult<Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
         unimplemented!()
     }
 
-    pub fn range_no_proof<K>(&self, key: &K) -> RangeIter<Q>
+    pub fn range_no_proof<K>(&self, key: &K) -> Result<RangeIter<Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
