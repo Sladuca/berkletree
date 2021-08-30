@@ -54,7 +54,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 		match self {
 			Node::Internal(node) => node.insert(key, value, hash),
 			Node::Leaf(node) => {
-				let leaf = node.insert(key.as_ref(), value, hash);
+				let leaf = node.insert(key, value, hash);
 				MembershipProof {
 					commitments: Vec::new(),
                     path: Vec::new(),
@@ -141,7 +141,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
 // assumes there will be no more than 255 duplicate keys in a single node
 #[derive(Debug, Clone)]
-struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], u8);
+pub(crate) struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], u8);
 
 impl<const MAX_KEY_LEN: usize> PartialEq for KeyWithCounter<MAX_KEY_LEN> {
     fn eq(&self, other: &KeyWithCounter<MAX_KEY_LEN>) -> bool {
@@ -160,6 +160,12 @@ impl<const MAX_KEY_LEN: usize> PartialOrd for KeyWithCounter<MAX_KEY_LEN> {
 impl<const MAX_KEY_LEN: usize> Ord for KeyWithCounter<MAX_KEY_LEN> {
     fn cmp(&self, other: &Self) -> Ordering {
         Ord::cmp(&self.0, &other.0)
+    }
+}
+
+impl<const MAX_KEY_LEN: usize> AsRef<[u8]> for KeyWithCounter<MAX_KEY_LEN> {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
