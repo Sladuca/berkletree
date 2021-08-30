@@ -1,5 +1,5 @@
 use kzg::{KZGBatchWitness, KZGCommitment, KZGParams, KZGProver, KZGWitness};
-use std::convert::{TryFrom};
+use std::convert::{TryFrom, TryInto};
 use bytes::Bytes;
 use blake3::{Hash as Blake3Hash};
 use bls12_381::{Bls12, Scalar};
@@ -48,7 +48,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 }
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
-	pub(crate) fn insert(&mut self, key: &[u8], value: &[u8], hash: Blake3Hash) -> MembershipProof<MAX_KEY_LEN>
+	pub(crate) fn insert(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> MembershipProof<MAX_KEY_LEN>
     {
 		match self {
 			Node::Internal(node) => node.insert(key, value, hash),
@@ -63,7 +63,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 		}
     }
 
-    pub(crate) fn insert_no_proof(&mut self, key: &[u8], value: &[u8], hash: Blake3Hash)
+    pub(crate) fn insert_no_proof(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash)
     {
         match self {
             Node::Internal(node) => node.insert_no_proof(key, value, hash),
@@ -71,17 +71,17 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    pub(crate) fn bulk_insert(&mut self, entries: Vec<(&[u8], &[u8], Blake3Hash)>) -> Vec<MembershipProof<MAX_KEY_LEN>>
+    pub(crate) fn bulk_insert(&mut self, entries: Vec<(&[u8; MAX_KEY_LEN], &[u8; MAX_VAL_LEN], Blake3Hash)>) -> Vec<MembershipProof<MAX_KEY_LEN>>
     {
         unimplemented!()
     }
 
-    pub(crate) fn bulk_insert_no_proof(&mut self, entries: Vec<(&[u8], &[u8], Blake3Hash)>)
+    pub(crate) fn bulk_insert_no_proof(&mut self, entries: Vec<(&[u8; MAX_KEY_LEN], &[u8; MAX_VAL_LEN], Blake3Hash)>)
     {
         unimplemented!()
     }
 
-    pub(crate) fn get(&self, key: &[u8]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN>
+    pub(crate) fn get(&self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN>
     {
         match self {
             Node::Internal(node) => node.get(key),
@@ -112,27 +112,27 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    pub(crate) fn get_no_proof(&self, key: &[u8]) -> Option<Offset>
+    pub(crate) fn get_no_proof(&self, key: &[u8; MAX_KEY_LEN]) -> Option<Offset>
     {
         unimplemented!()
     }
 
-    pub(crate) fn contains_key(&self, key: &[u8]) -> ContainsResult<MAX_KEY_LEN>
+    pub(crate) fn contains_key(&self, key: &[u8; MAX_KEY_LEN]) -> ContainsResult<MAX_KEY_LEN>
     {
         unimplemented!()
     }
 
-    pub(crate) fn contains_key_no_proof(&self, key: &[u8]) -> bool
+    pub(crate) fn contains_key_no_proof(&self, key: &[u8; MAX_KEY_LEN]) -> bool
     {
         unimplemented!()
     }
 
-    pub(crate) fn range(&self, left: &[u8], right: &[u8]) -> RangeResult<Q, MAX_KEY_LEN, MAX_VAL_LEN>
+    pub(crate) fn range(&self, left: &[u8; MAX_KEY_LEN], right: &[u8; MAX_KEY_LEN]) -> RangeResult<Q, MAX_KEY_LEN, MAX_VAL_LEN>
     {
         unimplemented!()
     }
 
-    pub(crate) fn range_no_proof(&self, key: &[u8]) -> RangeIter<Q, MAX_KEY_LEN, MAX_VAL_LEN>
+    pub(crate) fn range_no_proof(&self, left: &[u8; MAX_KEY_LEN], right: &[u8; MAX_KEY_LEN]) -> RangeIter<Q, MAX_KEY_LEN, MAX_VAL_LEN>
     {
         unimplemented!()
     }
@@ -183,20 +183,20 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         Ok(blake3::hash(&commitment.to_uncompressed()).into())
     }
 	
-	pub(crate) fn insert(&self, key: &[u8], value: &[u8], hash: Blake3Hash) -> MembershipProof<MAX_KEY_LEN> {
+	pub(crate) fn insert(&self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> MembershipProof<MAX_KEY_LEN> {
 		unimplemented!()	
 	}
 
-	pub(crate) fn insert_no_proof(&self, key: &[u8], value: &[u8], hash: Blake3Hash) {
+	pub(crate) fn insert_no_proof(&self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) {
 		unimplemented!()	
 	}
 
-	pub(crate) fn get(&self, key: &[u8]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN>
+	pub(crate) fn get(&self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN>
 	{
 		unimplemented!()
 	}
 
-	pub(crate) fn get_no_proof(&self, key: &[u8]) -> Option<Offset>
+	pub(crate) fn get_no_proof(&self, key: &[u8; MAX_KEY_LEN]) -> Option<Offset>
 	{
 		unimplemented!()
 	}
@@ -252,6 +252,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
 	pub(crate) fn insert(&self, key: &[u8], value: &[u8], hash: Blake3Hash) -> KVProof
     {
+        let idx = self.keys.binary_search(key.try_into().unwrap());
         unimplemented!()
 	}
 

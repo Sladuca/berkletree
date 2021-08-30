@@ -152,7 +152,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         } else if value.len() > MAX_VAL_LEN {
             Err(BerkleError::ValueTooLong)
         } else {
-		    Ok(self.root.borrow_mut().insert(key.as_ref(), value.as_ref(), hash))
+            let mut key_padded = [0; MAX_KEY_LEN];
+            key_padded[0..key.len()].copy_from_slice(key.as_ref());
+
+            let mut value_padded = [0; MAX_VAL_LEN];
+            value_padded[0..value.len()].copy_from_slice(value.as_ref());
+
+		    Ok(self.root.borrow_mut().insert(&key_padded, &value_padded, hash))
         }
     }
 
@@ -239,7 +245,7 @@ mod tests {
     #[test]
     fn test_non_bulk_only_root_no_proof() {
         let params = test_setup();
-        let mut tree: BerkleTree<11> = BerkleTree::new_with_params(&params);
+        let mut tree: BerkleTree<11, 8, 8> = BerkleTree::new_with_params(&params);
 
         let keys: Vec<usize> = (0..1000).step_by(10).collect();
 
@@ -247,7 +253,7 @@ mod tests {
         for &i in keys.iter() {
             let b = &i.to_le_bytes();
             let hash = blake3::hash(b);
-            tree.insert_no_proof(b, i, hash);
+            tree.insert_no_proof(b, b, hash).unwrap();
             assert_is_b_tree(&tree);
         }
 
@@ -255,12 +261,13 @@ mod tests {
             let b = &i.to_le_bytes();
             let v = tree
                 .get_no_proof(b)
-                .expect(&format!("could not find key {} in the tree", i));
-            assert_eq!(v, i);
+                .unwrap()
+                .expect(&format!("could not find key {:?} in the tree", b));
+            assert_eq!(&v, b);
             assert_is_b_tree(&tree);
         }
 
-        let mut tree: BerkleTree<11> = BerkleTree::new_with_params(&params);
+        let mut tree: BerkleTree<11, 8, 8> = BerkleTree::new_with_params(&params);
         let rng = Rng::with_seed(RAND_SEED);
         let mut keys_shuffled = keys.clone();
 
@@ -268,7 +275,7 @@ mod tests {
         for &i in keys.iter() {
             let b = &i.to_le_bytes();
             let hash = blake3::hash(b);
-            tree.insert_no_proof(b, i, hash);
+            tree.insert_no_proof(b, b, hash).unwrap();
             assert_is_b_tree(&tree);
         }
 
@@ -278,18 +285,19 @@ mod tests {
             let b = &i.to_le_bytes();
             let v = tree
                 .get_no_proof(b)
+                .unwrap()
                 .expect(&format!("could not find key {} in the tree", i));
-            assert_eq!(v, i);
+            assert_eq!(&v, b);
             assert_is_b_tree(&tree);
         }
 
-        let mut tree: BerkleTree<11> = BerkleTree::new_with_params(&params);
+        let mut tree: BerkleTree<11, 8, 8> = BerkleTree::new_with_params(&params);
         // unordered insert, ordered get
         rng.shuffle(&mut keys_shuffled);
         for &i in keys_shuffled.iter() {
             let b = &i.to_le_bytes();
             let hash = blake3::hash(b);
-            tree.insert_no_proof(b, i, hash);
+            tree.insert_no_proof(b, b, hash).unwrap();
             assert_is_b_tree(&tree);
         }
 
@@ -297,18 +305,19 @@ mod tests {
             let b = &i.to_le_bytes();
             let v = tree
                 .get_no_proof(b)
+                .unwrap()
                 .expect(&format!("could not find key {} in the tree", i));
-            assert_eq!(v, i);
+            assert_eq!(&v, b);
             assert_is_b_tree(&tree);
         }
 
-        let mut tree: BerkleTree<11> = BerkleTree::new_with_params(&params);
+        let mut tree: BerkleTree<11, 8, 8> = BerkleTree::new_with_params(&params);
         // unordered insert, unordered get
         rng.shuffle(&mut keys_shuffled);
         for &i in keys_shuffled.iter() {
             let b = &i.to_le_bytes();
             let hash = blake3::hash(b);
-            tree.insert_no_proof(b, i, hash);
+            tree.insert_no_proof(b, b, hash).unwrap();
             assert_is_b_tree(&tree);
         }
 
@@ -317,8 +326,9 @@ mod tests {
             let b = &i.to_le_bytes();
             let v = tree
                 .get_no_proof(b)
+                .unwrap()
                 .expect(&format!("could not find key {} in the tree", i));
-            assert_eq!(v, i);
+            assert_eq!(&v, b);
             assert_is_b_tree(&tree);
         }
     }
