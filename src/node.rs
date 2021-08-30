@@ -458,13 +458,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     fn get_witness(&mut self, idx: usize) -> KZGWitness<Bls12> {
         let prover = &mut self.prover;
         let keys = &self.keys;
-        let hashes= &self.hashes;
+        let hashes = &self.hashes;
 
         *self.witnesses[idx].get_or_insert_with(|| {
             let x = keys[idx].field_hash_with_idx(idx);
             prover
-            .create_witness((x.into(), hashes[idx].into()))
-            .expect("node kv pair not on polynomial!") 
+                .create_witness((x.into(), hashes[idx].into()))
+                .expect("node kv pair not on polynomial!")
         })
     }
 
