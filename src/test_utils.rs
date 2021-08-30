@@ -1,11 +1,21 @@
 use crate::*;
 use std::fmt::Debug;
 
-pub(crate) fn assert_is_b_tree<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>(tree: &BerkleTree<Q, MAX_KEY_LEN, MAX_VAL_LEN>) {
+pub(crate) fn assert_is_b_tree<
+    const Q: usize,
+    const MAX_KEY_LEN: usize,
+    const MAX_VAL_LEN: usize,
+>(
+    tree: &BerkleTree<Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+) {
     assert_is_b_tree_inner(&tree.root.borrow(), (None, None), 0)
 }
 
-pub(crate) fn assert_is_b_tree_inner<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>(
+pub(crate) fn assert_is_b_tree_inner<
+    const Q: usize,
+    const MAX_KEY_LEN: usize,
+    const MAX_VAL_LEN: usize,
+>(
     node: &Node<Q, MAX_KEY_LEN, MAX_VAL_LEN>,
     parent_keys: (Option<&[u8]>, Option<&[u8]>),
     level: usize,

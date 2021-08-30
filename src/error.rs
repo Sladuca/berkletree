@@ -7,7 +7,7 @@ pub enum BerkleError {
     #[error("key too long")]
     KeyTooLong,
     #[error("value too long")]
-    ValueTooLong
+    ValueTooLong,
 }
 
 #[derive(Debug, Error)]
