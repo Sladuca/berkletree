@@ -1,7 +1,7 @@
 use kzg::{KZGBatchWitness, KZGCommitment, KZGParams, KZGProver, KZGWitness};
 use std::convert::{TryFrom, TryInto};
 use std::cmp::{PartialEq, PartialOrd, Ord, Ordering};
-use bytes::Bytes;
+
 use blake3::{Hash as Blake3Hash};
 use bls12_381::{Bls12, Scalar};
 use either::Either;
@@ -288,6 +288,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
 	pub(crate) fn insert(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> KVProof {
        let idx = self.insert_inner(key, value, hash);
+       
        unimplemented!()
 	}  
 

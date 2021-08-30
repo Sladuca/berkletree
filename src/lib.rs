@@ -1,7 +1,6 @@
 use bitvec::vec::BitVec;
 use blake3::Hash as Blake3Hash;
 use bls12_381::{Bls12, Scalar};
-use bytes::Bytes;
 use kzg::{KZGCommitment, KZGParams, KZGWitness};
 use std::{cell::RefCell, rc::Rc};
 
@@ -125,10 +124,10 @@ pub struct RangeResult<'params, const Q: usize, const MAX_KEY_LEN: usize, const 
 }
 
 pub struct RangeIter<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
-    left_path: Vec<Bytes>,
-    right_path: Vec<Bytes>,
+    left_path: Vec<[u8; MAX_KEY_LEN]>,
+    right_path: Vec<[u8; MAX_KEY_LEN]>,
     root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
-    current_key: Bytes,
+    current_key: [u8; MAX_KEY_LEN],
 }
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
@@ -219,7 +218,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         unimplemented!()
     }
 
-    pub fn range_no_proof<K>(&self, key: &K) -> Result<RangeIter<Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
+    pub fn range_no_proof<K>(&self, left: &K, right: &K) -> Result<RangeIter<Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
