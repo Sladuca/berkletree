@@ -1,5 +1,6 @@
 use kzg::{KZGBatchWitness, KZGCommitment, KZGParams, KZGProver, KZGWitness};
 use std::convert::{TryFrom, TryInto};
+use std::cmp::{PartialEq, PartialOrd, Ord, Ordering};
 use bytes::Bytes;
 use blake3::{Hash as Blake3Hash};
 use bls12_381::{Bls12, Scalar};
@@ -138,14 +139,38 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     }
 }
 
+// assumes there will be no more than 255 duplicate keys in a single node
+#[derive(Debug, Clone)]
+struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], u8);
+
+impl<const MAX_KEY_LEN: usize> PartialEq for KeyWithCounter<MAX_KEY_LEN> {
+    fn eq(&self, other: &KeyWithCounter<MAX_KEY_LEN>) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<const MAX_KEY_LEN: usize> Eq for KeyWithCounter<MAX_KEY_LEN> {}
+
+impl<const MAX_KEY_LEN: usize> PartialOrd for KeyWithCounter<MAX_KEY_LEN> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        PartialOrd::partial_cmp(&self.0, &other.0)
+    }
+}
+
+impl<const MAX_KEY_LEN: usize> Ord for KeyWithCounter<MAX_KEY_LEN> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        Ord::cmp(&self.0, &other.0)
+    }
+}
+
+
 #[derive(Clone)]
 pub struct InternalNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     pub(crate) hash: Option<FieldHash>,
 	// INVARIANT: children.len() == keys.len()
-	// INVARIANT: keys has no duplicates
 	// the ith key is >= than all keys in the ith child but < all keys in the i+1th child
+    pub(crate) keys: Vec<KeyWithCounter<MAX_KEY_LEN>>,
     pub(crate) children: Vec<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>,
-    pub(crate) keys: Vec<[u8; MAX_KEY_LEN]>,
     // witnesses are lazily-computed - none if any particular witness hasn't been computed yet.
     pub(crate) witnesses: Vec<Option<KZGWitness<Bls12>>>,
     pub(crate) batch_witness: Option<KZGBatchWitness<Bls12, Q>>,
@@ -167,7 +192,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         InternalNode {
             hash: None,
             children: vec![left, right],
-            keys: vec![key],
+            keys: vec![KeyWithCounter(key, 0)],
             witnesses: Vec::new(),
             batch_witness: None,
             prover: KZGProver::new(params),
@@ -207,8 +232,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 pub struct LeafNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     pub(crate) hash: Option<FieldHash>,
 	// INVARIANT: children.len() == keys.len()
-	// INVARIANT: keys has no duplicates
-    pub(crate) keys: Vec<[u8; MAX_KEY_LEN]>,
+    pub(crate) keys: Vec<KeyWithCounter<MAX_KEY_LEN>>,
     pub(crate) values: Vec<[u8; MAX_VAL_LEN]>,
     pub(crate) hashes: Vec<FieldHash>,
     pub(crate) witnesses: Vec<Option<KZGWitness<Bls12>>>,
@@ -250,11 +274,22 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         Ok(blake3::hash(&commitment.to_uncompressed()).into())
     }
 
-	pub(crate) fn insert(&self, key: &[u8], value: &[u8], hash: Blake3Hash) -> KVProof
-    {
-        let idx = self.keys.binary_search(key.try_into().unwrap());
-        unimplemented!()
-	}
+    fn insert_inner(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> usize {
+        let mut key = KeyWithCounter(key.to_owned(), 0);
+        let idx = self.keys.partition_point(|k| k.0 <= key.0);
+        if idx != 0 && self.keys[idx - 1] == key {
+            key.1 = self.keys[idx - 1].1 + 1;
+        }
+        
+        self.keys.insert(idx, key);
+        self.values.insert(idx, value.to_owned());
+        idx
+    }
+
+	pub(crate) fn insert(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> KVProof {
+       let idx = self.insert_inner(key, value, hash);
+       unimplemented!()
+	}  
 
 	pub(crate) fn insert_no_proof(&self, key: &[u8], value: &[u8], hash: Blake3Hash) {
 		unimplemented!()	
