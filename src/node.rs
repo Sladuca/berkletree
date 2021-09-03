@@ -417,7 +417,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
-    ) -> usize {
+    ) -> (usize, Option<LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>) {
         let mut key = KeyWithCounter(key.to_owned(), 0);
         let idx = self.keys.partition_point(|k| k.0 <= key.0);
         if idx != 0 && self.keys[idx - 1] == key {
@@ -427,7 +427,16 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         self.keys.insert(idx, key);
         self.values.insert(idx, value.to_owned());
         self.hashes.insert(idx, hash.into());
-        idx
+
+        if self.keys.len() == Q {
+            let mid = self.keys.len() / 1;
+
+            let mut right = LeafNode::new(self.prover.parameters());
+
+            let mid = self.keys.split_off(mid);
+        }
+
+        (idx, None)
     }
 
     pub(crate) fn insert(
@@ -435,7 +444,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
-    ) -> KVProof {
+    ) -> (KVProof, Option<LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>) {
         let idx = self.insert_inner(key, value, hash);
         let (commitment, witness) = self.reinterpolate_and_create_witness(idx);
 

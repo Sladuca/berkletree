@@ -6,9 +6,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-kzg = { version = "0.1.5", features = ['std'] }
+kzg = { version = "0.1.6", features = ['std'] }
 blake3 = "1.0"
-bls12_381 = "0.5.0"
+bls12_381 = "0.6.0"
 bitvec = "0.22.3"
 thiserror = "1.0.26"
 either = "1.6.1"
