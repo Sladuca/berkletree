@@ -50,7 +50,10 @@ impl Into<Scalar> for FieldHash {
 pub struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], u8);
 
 impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
-    pub(crate) fn new(key: [u8; MAX_KEY_LEN], count: u8) -> Self {
+    pub(crate) fn new(key: [u8; MAX_KEY_LEN], mut count: u8) -> Self {
+        if key == [0; MAX_KEY_LEN] {
+            count += 1;
+        }
         KeyWithCounter(key, count)
     }
 }
@@ -253,6 +256,8 @@ mod tests {
             let hash = blake3::hash(&value.to_le_bytes());
             let proof = tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash).unwrap();
             proofs.push(proof);
+
+            assert_is_b_tree(&tree)
         }
     }
 }
