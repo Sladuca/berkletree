@@ -46,7 +46,7 @@ impl Into<Scalar> for FieldHash {
 }
 
 // assumes there will be no more than 255 duplicate keys in a single node
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], u8);
 
 impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
@@ -64,19 +64,19 @@ impl<const MAX_KEY_LEN: usize> PartialEq for KeyWithCounter<MAX_KEY_LEN> {
     }
 }
 
-impl<const MAX_KEY_LEN: usize> Eq for KeyWithCounter<MAX_KEY_LEN> {}
+// impl<const MAX_KEY_LEN: usize> Eq for KeyWithCounter<MAX_KEY_LEN> {}
 
-impl<const MAX_KEY_LEN: usize> PartialOrd for KeyWithCounter<MAX_KEY_LEN> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        PartialOrd::partial_cmp(&self.0, &other.0)
-    }
-}
+// impl<const MAX_KEY_LEN: usize> PartialOrd for KeyWithCounter<MAX_KEY_LEN> {
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         PartialOrd::partial_cmp(&self.0, &other.0)
+//     }
+// }
 
-impl<const MAX_KEY_LEN: usize> Ord for KeyWithCounter<MAX_KEY_LEN> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        Ord::cmp(&self.0, &other.0)
-    }
-}
+// impl<const MAX_KEY_LEN: usize> Ord for KeyWithCounter<MAX_KEY_LEN> {
+//     fn cmp(&self, other: &Self) -> Ordering {
+//         Ord::cmp(&self.0, &other.0)
+//     }
+// }
 
 impl<const MAX_KEY_LEN: usize> AsRef<[u8]> for KeyWithCounter<MAX_KEY_LEN> {
     fn as_ref(&self) -> &[u8] {
@@ -140,13 +140,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
             match new_node {
                 Some((split_key, child)) => {
-                    let proof_in_new_node = split_key <= key_padded;
+                    let proof_in_new_node = key_padded >= split_key;
 
                     let new_root= InternalNode {
-                        hash: None,
                         keys: vec![null_key(), KeyWithCounter::new(split_key, 0)],
                         children: vec![child],
-                        witnesses: vec![None],
+                        witnesses: vec![None; Q],
                         batch_witness: None,
                         prover: KZGProver::new(self.params),
                     };

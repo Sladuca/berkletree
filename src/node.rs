@@ -77,6 +77,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         } 
     }
 
+    pub(crate) fn reinterpolate(&mut self) -> KZGCommitment<Bls12> {
+        match self {
+            Node::Internal(node) => node.reinterpolate(),
+            Node::Leaf(node) => node.reinterpolate()
+        }
+    }
+
 
     pub(crate) fn insert(
         &mut self,
@@ -198,7 +205,6 @@ impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
 #[derive(Clone)]
 pub struct InternalNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
 {
-    pub(crate) hash: Option<FieldHash>,
     // INVARIANT: children.len() == keys.len()
     // the ith key is >= than all keys in the ith child but < all keys in the i+1th child
     pub(crate) keys: Vec<KeyWithCounter<MAX_KEY_LEN>>,
@@ -224,10 +230,9 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         };
 
         InternalNode {
-            hash: None,
             children: vec![left, right],
             keys: vec![null_key(), KeyWithCounter(key, 0)],
-            witnesses: vec![None, None],
+            witnesses: vec![None; Q],
             batch_witness: None,
             prover: KZGProver::new(params),
         }
@@ -265,23 +270,38 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 let right_keys = self.keys.split_off(mid);
                 let right_children = self.children.split_off(mid);
            
-                let right = InternalNode {
-                    hash: None,
+                let mut right = InternalNode {
                     children: right_children,
                     keys: right_keys,
-                    witnesses: Vec::new(),
+                    witnesses: vec![None; Q],
                     batch_witness: None,
                     prover: KZGProver::new(self.prover.parameters()),
                 };
 
                 let split_key = self.keys.last().unwrap().clone();
 
+                right.reinterpolate();
+                self.reinterpolate();
+
                 (idx, proof, Some((split_key.into(), right)))
             } else {
+                self.reinterpolate();
                 (idx, proof, None)
             }
         } else {
             (idx, proof, None)
+        }
+    }
+
+    pub(crate) fn get_witness(&mut self, idx: usize) -> KZGWitness<Bls12> {
+        if let Some(witness) = self.witnesses[idx] {
+            witness
+        } else {
+            let x = self.keys[idx].field_hash_with_idx(idx).into();
+            let y = self.children[idx].hash().unwrap().into();
+            let witness = self.prover.create_witness((x, y)).unwrap();
+            self.witnesses[idx] = Some(witness);
+            witness
         }
     }
 
@@ -291,7 +311,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     ) -> (KZGCommitment<Bls12>, KZGWitness<Bls12>) {
         let (commitment, xs, ys) = self.reinterpolate_inner();
 
-        // *should* be guaranteed to be on the polynomial since we just interpolated
+        // should be guaranteed to be on the polynomial since we just interpolated
         let witness = self.prover.create_witness((xs[idx], ys[idx])).unwrap();
         self.witnesses[idx] = Some(witness);
         (commitment, witness)
@@ -301,12 +321,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         let xs: Vec<Scalar> = self
             .keys
             .iter()
-            .chain(std::iter::once(&null_key()))
             .enumerate()
             .map(|(i, k)| k.field_hash_with_idx(i).into())
             .collect();
 
-        let ys: Vec<Scalar> = self.children.iter().map(|child| child.hash().unwrap().into()).collect();
+        let ys: Vec<Scalar> = self.children.iter_mut().map(|child| child.hash().unwrap().into()).collect();
+
 
         let polynomial: Polynomial<Bls12, Q> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
@@ -315,33 +335,41 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         (commitment, xs, ys)
     }
 
+    pub(crate) fn reinterpolate(&mut self) -> KZGCommitment<Bls12> {
+        let (commitment, _, _) = self.reinterpolate_inner();
+        commitment
+    }
+
     pub(crate) fn insert(
         &mut self,
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
     ) -> (MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
-        let (idx, mut proof, new_node) = self.insert_inner(key, value, hash);
+        let (idx, mut proof, mut new_node) = self.insert_inner(key, value, hash);
 
         let (commitment, inner_proof) = match new_node {
-            Some((_split_key, ref new_node)) => {
+            Some((_split_key, ref mut new_node)) => {
                 if idx >= self.keys.len() { 
-                    let (commitment, witness) = self.reinterpolate_and_create_witness(idx);
+                    let idx = idx - self.keys.len();
+                    let commitment = new_node.prover.commitment().unwrap();
+                    let witness = new_node.get_witness(idx);
                     (
                         commitment,
                         InnerNodeProof {
-                            idx: idx - self.keys.len(),
-                            key: new_node.keys[idx - self.keys.len()].clone(),
-                            child_hash: new_node.children[idx - self.keys.len()].hash().unwrap(),
+                            idx,
+                            key: new_node.keys[idx].clone(),
+                            child_hash: new_node.children[idx].hash().unwrap(),
                             witness
                         },
                     )
                 } else {
-                    let (commitment, witness) = self.reinterpolate_and_create_witness(idx);
+                    let commitment = self.prover.commitment().unwrap();
+                    let witness = self.get_witness(idx);
                     (
                         commitment,
                         InnerNodeProof {
-                            idx: idx - self.keys.len(),
+                            idx,
                             key: self.keys[idx].clone(),
                             child_hash: self.children[idx].hash().unwrap(),
                             witness
@@ -350,7 +378,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 }
             }
             None => {
-                let (commitment, witness) = self.reinterpolate_and_create_witness(idx);
+                let commitment = self.prover.commitment().unwrap();
+                let witness = self.get_witness(idx);
                 (
                     commitment,
                     InnerNodeProof {
@@ -376,9 +405,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
 #[derive(Clone)]
 pub struct LeafNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
-    pub(crate) hash: Option<FieldHash>,
     // INVARIANT: children.len() == keys.len()
-
     pub(crate) keys: Vec<KeyWithCounter<MAX_KEY_LEN>>,
     pub(crate) values: Vec<[u8; MAX_VAL_LEN]>,
     pub(crate) hashes: Vec<FieldHash>,
@@ -417,11 +444,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     // for the commitment to occur, you must call commit()
     pub(crate) fn new(params: &'params KZGParams<Bls12, Q>) -> Self {
         LeafNode {
-            hash: None,
             values: Vec::with_capacity(Q),
             keys: Vec::with_capacity(Q),
             hashes: Vec::with_capacity(Q),
-            witnesses: Vec::with_capacity(Q),
+            witnesses: vec![None; Q],
             batch_witness: None,
             prover: KZGProver::new(params),
         }
@@ -449,6 +475,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
         let ys: Vec<Scalar> = self.hashes.iter().map(|&k| k.into()).collect();
 
+
         let polynomial: Polynomial<Bls12, Q> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
         let commitment = self.prover.commit(polynomial);
@@ -467,7 +494,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     ) -> (KZGCommitment<Bls12>, KZGWitness<Bls12>) {
         let (commitment, xs, ys) = self.reinterpolate_inner();
 
-        // *should* be guaranteed to be on the polynomial since we just interpolated
+        // should be guaranteed to be on the polynomial since we just interpolated
         let witness = self.prover.create_witness((xs[idx], ys[idx])).unwrap();
         self.witnesses[idx] = Some(witness);
         (commitment, witness)
@@ -490,16 +517,21 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         self.hashes.insert(idx, hash.into());
 
         if self.keys.len() == Q {
-            let mid = self.keys.len() / 1;
+            let mid = self.keys.len() / 2;
 
             let mut right = LeafNode::new(self.prover.parameters());
             right.keys = self.keys.split_off(mid);
             right.values = self.values.split_off(mid);
+            right.hashes = self.hashes.split_off(mid);
 
             let split_key = self.keys.last().unwrap().clone();
 
+            self.reinterpolate();
+            right.reinterpolate();
+
             (idx, Some((split_key.into(), right)))
         } else {
+            self.reinterpolate();
             (idx, None)
         }
     }
@@ -511,15 +543,48 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         hash: Blake3Hash,
     ) -> (KVProof, Option<([u8; MAX_KEY_LEN], LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
         let (idx, new_node) = self.insert_inner(key, value, hash);
-        let (commitment, witness) = self.reinterpolate_and_create_witness(idx);
 
-        let proof = KVProof {
-            idx,
-            commitment,
-            witness,
-        };
-
-        (proof, new_node)
+        // if value is in new node, proof needs to come from new node
+        match new_node {
+            Some((split_key, mut new_node)) => {
+                if idx >= self.keys.len() {
+                    let idx = idx - self.keys.len();
+                    let commitment = new_node.prover.commitment().unwrap();
+                    let witness = new_node.get_witness(idx);
+                    (
+                        KVProof {
+                            idx,
+                            commitment,
+                            witness,
+                        },
+                        Some((split_key, new_node))
+                    )                    
+                } else {
+                    let commitment = self.prover.commitment().unwrap();
+                    let witness = self.get_witness(idx);
+                    (
+                        KVProof {
+                            idx,
+                            commitment,
+                            witness,
+                        },
+                        Some((split_key, new_node))
+                    )                    
+                }
+            },
+            None => {
+                let commitment = self.prover.commitment().unwrap();
+                let witness = self.get_witness(idx);
+                (
+                    KVProof {
+                        idx,
+                        commitment,
+                        witness,
+                    },
+                    None 
+                )                    
+            }
+        }
     }
 
     fn get_witness(&mut self, idx: usize) -> KZGWitness<Bls12> {

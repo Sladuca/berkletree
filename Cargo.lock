@@ -164,9 +164,9 @@ dependencies = [
 
 [[package]]
 name = "kzg"
-version = "0.1.6"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2dec185f0a8752fa8163463683bafcc9b5a1e7f4742effc77973be8c5653caa"
+checksum = "96b9ad5a061e009f108ff2d102dd7628186141c70a82ef33c2fdd620b8b62524"
 dependencies = [
  "pairing",
  "thiserror",
