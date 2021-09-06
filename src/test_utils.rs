@@ -8,7 +8,10 @@ pub(crate) fn assert_is_b_tree<
 >(
     tree: &BerkleTree<Q, MAX_KEY_LEN, MAX_VAL_LEN>,
 ) {
-    assert_is_b_tree_inner(&tree.root.borrow(), (None, None), 0)
+    println!("-----------");
+    let res = assert_is_b_tree_inner(&tree.root.borrow(), (None, None), 0);
+    println!("-----------\n");
+    res
 }
 
 pub(crate) fn assert_is_b_tree_inner<
@@ -24,7 +27,7 @@ pub(crate) fn assert_is_b_tree_inner<
 
     match node {
         Node::Internal(node) => {
-            println!("keys: {:?}", node.keys);
+            println!("(internal) parent key: {:?}, keys: {:?}", &left_parent_key, node.keys);
             assert_at_node(
                 node.keys.len() == node.children.len(),
                 &left_parent_key,
@@ -46,10 +49,12 @@ pub(crate) fn assert_is_b_tree_inner<
                 "keys are not sorted".to_string(),
             );
 
-            // ensure every key in node is >= left parent key but < right parent key
+            // ensure every key in node *except for 0th key, which is the null key*
+            // is >= left parent key but < right parent key
             // ignore the corresponding check of each parent key that is None
             node.keys
                 .iter()
+                .skip(1)
                 .for_each(|key| match (left_parent_key.as_ref(), right_parent_key.as_ref()) {
                     (Some(left), Some(right)) => assert_at_node(
                         key >= &left && key < &right,
@@ -93,6 +98,7 @@ pub(crate) fn assert_is_b_tree_inner<
             });
         }
         Node::Leaf(node) => {
+            println!("(leaf) parent_key: {:?} keys: {:?}", &left_parent_key, node.keys);
             assert_at_node(
                 node.keys.len() >= Q / 2,
                 &left_parent_key,

@@ -250,53 +250,14 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         Ok(hasher.finalize().into())
     }
 
-    fn get_key_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
-        self.keys.partition_point(|k| &k.0 <= key)
-    }
-
-    fn insert_inner(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> (usize, MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
-        let idx = self.get_key_idx(key);
-
-        let (proof, new_node) = self.children[idx].insert(key, value, hash);
-        
-        if let Some((split_key, child)) = new_node {
-            let idx = self.get_key_idx(&split_key);
-            self.keys.insert(idx, KeyWithCounter(split_key, 0));
-            self.children.insert(idx, child);
-
-            if self.keys.len() == Q {
-                let mid = self.keys.len() / 2;
-
-                let right_keys = self.keys.split_off(mid);
-                let right_children = self.children.split_off(mid);
-           
-                let mut right = InternalNode {
-                    children: right_children,
-                    keys: right_keys,
-                    witnesses: vec![None; Q],
-                    batch_witness: None,
-                    prover: KZGProver::new(self.prover.parameters()),
-                };
-
-                let split_key = self.keys.last().unwrap().clone();
-
-                right.reinterpolate();
-                self.reinterpolate();
-
-                (idx, proof, Some((split_key.into(), right)))
-            } else {
-                self.reinterpolate();
-                (idx, proof, None)
-            }
-        } else {
-            (idx, proof, None)
-        }
-    }
-
     pub(crate) fn get_witness(&mut self, idx: usize) -> KZGWitness<Bls12> {
         if let Some(witness) = self.witnesses[idx] {
             witness
         } else {
+            println!("({:?}, {:?})", &self.keys[idx], match self.children[idx] {
+                Node::Internal(ref node) => &node.keys[0],
+                Node::Leaf(ref node) => &node.keys[0]
+            });
             let x = self.keys[idx].field_hash_with_idx(idx).into();
             let y = self.children[idx].hash().unwrap().into();
             let witness = self.prover.create_witness((x, y)).unwrap();
@@ -327,7 +288,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
         let ys: Vec<Scalar> = self.children.iter_mut().map(|child| child.hash().unwrap().into()).collect();
 
-
         let polynomial: Polynomial<Bls12, Q> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
         let commitment = self.prover.commit(polynomial);
@@ -338,6 +298,61 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     pub(crate) fn reinterpolate(&mut self) -> KZGCommitment<Bls12> {
         let (commitment, _, _) = self.reinterpolate_inner();
         commitment
+    }
+    
+    fn get_key_traversal_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
+        // find the last key that its' greater than
+        let idx = self.keys.partition_point(|k| key > &k.0);
+        if idx != 0 {
+            idx - 1
+        } else {
+            idx
+        }
+    }
+    
+    fn get_key_insertion_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
+        // find the first key it's not greater than
+        self.keys.partition_point(|k| key > &k.0)
+    }
+    
+    fn insert_inner(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> (usize, MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
+        let idx = self.get_key_traversal_idx(key);
+
+        let (proof, new_node) = self.children[idx].insert(key, value, hash);
+        
+        if let Some((split_key, child)) = new_node {
+            let idx = self.get_key_insertion_idx(&split_key);
+            self.keys.insert(idx, KeyWithCounter(split_key, 0));
+            self.children.insert(idx, child);
+
+            if self.keys.len() > Q {
+                let mid = self.keys.len() / 2;
+
+                let mut right_keys = self.keys.split_off(mid);
+                let split_key = right_keys[0].clone();
+                right_keys[0] = null_key();
+                let right_children = self.children.split_off(mid);
+           
+                let mut right = InternalNode {
+                    children: right_children,
+                    keys: right_keys,
+                    witnesses: vec![None; Q],
+                    batch_witness: None,
+                    prover: KZGProver::new(self.prover.parameters()),
+                };
+
+                right.reinterpolate();
+                self.reinterpolate();
+
+                (idx, proof, Some((split_key.into(), right)))
+            } else {
+                self.reinterpolate();
+                (idx, proof, None)
+            }
+        } else {
+            self.reinterpolate();
+            (idx, proof, None)
+        }
     }
 
     pub(crate) fn insert(
@@ -379,11 +394,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             }
             None => {
                 let commitment = self.prover.commitment().unwrap();
+                println!("{}", idx);
                 let witness = self.get_witness(idx);
                 (
                     commitment,
                     InnerNodeProof {
-                        idx: idx - self.keys.len(),
+                        idx: idx,
                         key: self.keys[idx].clone(),
                         child_hash: self.children[idx].hash().unwrap(),
                         witness
@@ -507,7 +523,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         hash: Blake3Hash,
     ) -> (usize, Option<([u8; MAX_KEY_LEN], LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
         let mut key = KeyWithCounter(key.to_owned(), 0);
-        let idx = self.keys.partition_point(|k| k.0 <= key.0);
+        let mut idx = self.keys.partition_point(|k| key.0 > k.0);
         if idx != 0 && self.keys[idx - 1] == key {
             key.1 = self.keys[idx - 1].1 + 1;
         }
@@ -524,7 +540,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             right.values = self.values.split_off(mid);
             right.hashes = self.hashes.split_off(mid);
 
-            let split_key = self.keys.last().unwrap().clone();
+            let split_key = right.keys[0].clone();
 
             self.reinterpolate();
             right.reinterpolate();
@@ -569,7 +585,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             witness,
                         },
                         Some((split_key, new_node))
-                    )                    
+                    )
                 }
             },
             None => {
