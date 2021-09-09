@@ -1,7 +1,7 @@
 use kzg::{
     polynomial::Polynomial, KZGBatchWitness, KZGCommitment, KZGParams, KZGProver, KZGWitness,
 };
-use std::convert::{TryFrom, TryInto};
+use std::{convert::{TryFrom, TryInto}, fmt, fmt::{Debug, Formatter}};
 
 use blake3::{Hash as Blake3Hash, Hasher as Blake3Hasher};
 use bls12_381::{Bls12, Scalar};
@@ -62,6 +62,23 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         match node {
             Node::Internal(node) => Ok(node),
             _ => Err(NodeConvertError::NotInternalNode),
+        }
+    }
+}
+
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Node::Internal(node) => {
+                f.debug_struct("InternalNode")
+                    .field("entries", node)
+                    .finish()
+            },
+            Node::Leaf(node) => {
+                f.debug_struct("LeafNode")
+                    .field("entries", node)
+                    .finish()
+            }
         }
     }
 }
@@ -215,6 +232,18 @@ pub struct InternalNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const
     pub(crate) prover: KZGProver<'params, Bls12, Q>,
 }
 
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut m = &mut f.debug_map();
+        for (key, child) in self.keys.iter().zip(self.children.iter()) {
+            m = m.entry(key, child);
+        }
+
+        m.finish()
+    }
+}
+
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
     InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
 {
@@ -296,8 +325,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     }
     
     fn get_key_traversal_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
-        // find the last key that its' greater than
-        let idx = self.keys.partition_point(|k| key > &k.0);
+        // find the last key that its' not less than
+        let idx = self.keys.partition_point(|k| key >= &k.0);
         if idx != 0 {
             idx - 1
         } else {
@@ -306,8 +335,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     }
     
     fn get_key_insertion_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
-        // find the first key it's not greater than
-        self.keys.partition_point(|k| key > &k.0)
+        // find the first key it's less than
+        self.keys.partition_point(|k| key >= &k.0)
     }
     
     fn insert_inner(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> (usize, MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
@@ -316,9 +345,21 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         let (proof, new_node) = self.children[idx].insert(key, value, hash);
         
         if let Some((split_key, child)) = new_node {
-            let idx = self.get_key_insertion_idx(&split_key);
-            self.keys.insert(idx, KeyWithCounter(split_key, 0));
-            self.children.insert(idx, child);
+            let insertion_idx = self.get_key_insertion_idx(&split_key);
+
+            let split_key = if insertion_idx != 0 && self.keys[insertion_idx - 1].0 == split_key {
+                KeyWithCounter(split_key, self.keys[insertion_idx - 1].1 + 1)
+            } else  {
+                KeyWithCounter(split_key, 0)
+            };
+
+            self.keys.insert(insertion_idx, split_key);
+            self.children.insert(insertion_idx, child);
+
+            // after inserting, key may be in a different place
+            // this is a naive way of figuring it out, but this is a 
+            // 'mvp' tree that will likely be rewritten so it's fine
+            let idx = self.get_key_traversal_idx(key);
 
             if self.keys.len() > Q {
                 let mid = self.keys.len() / 2;
@@ -425,6 +466,18 @@ pub struct LeafNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX
     // no sibling pointers yet
 }
 
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut m = &mut f.debug_map();
+        for (key, value) in self.keys.iter().zip(self.values.iter()) {
+            m = m.entry(key, value);
+        }
+
+        m.finish()
+    }
+}
+
 pub(crate) struct LeafGetFound<const MAX_VAL_LEN: usize>([u8; MAX_VAL_LEN], KVProof);
 pub(crate) enum LeafGetNotFound<const MAX_KEY_LEN: usize> {
     Left {
@@ -517,7 +570,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         hash: Blake3Hash,
     ) -> (usize, Option<([u8; MAX_KEY_LEN], LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
         let mut key = KeyWithCounter(key.to_owned(), 0);
-        let idx = self.keys.partition_point(|k| key.0 > k.0);
+        let idx = self.keys.partition_point(|k| key.0 >= k.0);
         if idx != 0 && self.keys[idx - 1] == key {
             key.1 = self.keys[idx - 1].1 + 1;
         }

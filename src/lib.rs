@@ -1,7 +1,7 @@
 use blake3::Hash as Blake3Hash;
 use bls12_381::{Bls12, Scalar};
 use kzg::{KZGParams, KZGProver};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, fmt, fmt::{Debug, Formatter}};
 use std::cmp::{Ord, PartialEq, PartialOrd};
 
 mod error;
@@ -98,6 +98,14 @@ pub(crate) fn null_key<const MAX_KEY_LEN: usize>() -> KeyWithCounter<MAX_KEY_LEN
 pub struct BerkleTree<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     params: &'params KZGParams<Bls12, Q>,
     root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
+}
+
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("BerkleTree")
+            .field("root", &self.root.borrow())
+            .finish()
+    }
 }
 
 
@@ -249,22 +257,33 @@ mod tests {
         // no dupes
         let keys: Vec<u32> = vec![5, 9, 12, 3, 8, 10, 1, 4];
         let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8];
-        let mut proofs = Vec::new();
+        let verifier = KZGVerifier::new(&params);
+
         for (key, value) in keys.iter().zip(values.iter()) {
             let hash = blake3::hash(&value.to_le_bytes());
             let proof = tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash).unwrap();
-            proofs.push(proof);
 
-            assert_is_b_tree(&tree)
+            assert_is_b_tree(&tree);
+
+            println!("------\n");
+            println!("{:#?}", tree);
+            assert!(proof.verify(key.to_le_bytes(), hash, &verifier), "proof verification for ({:?}, {:?}) failed", key, value);
         }
 
+        // with dupes
+        let keys: Vec<u32> = vec![6, 2, 4, 1, 1, 3, 5, 7, 4];
+        let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let verifier = KZGVerifier::new(&params);
 
-        for (proof, (key, value)) in proofs.iter().zip(keys.iter().zip(values.iter())) {
-            let value_hash = blake3::hash(&value.to_le_bytes());
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let hash = blake3::hash(&value.to_le_bytes());
+            let proof = tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash).unwrap();
 
-            assert!(proof.verify(key.to_le_bytes(), value_hash, &verifier), "proof verification for ({:?}, {:?}) failed", key, value);
+            assert_is_b_tree(&tree);
+
+            println!("------\n");
+            println!("{:#?}", tree);
+            assert!(proof.verify(key.to_le_bytes(), hash, &verifier), "proof verification for ({:?}, {:?}) failed", key, value);
         }
-
     }
 }

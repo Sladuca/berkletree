@@ -8,9 +8,9 @@ pub(crate) fn assert_is_b_tree<
 >(
     tree: &BerkleTree<Q, MAX_KEY_LEN, MAX_VAL_LEN>,
 ) {
-    println!("-----------");
+    // println!("-----------");
     let res = assert_is_b_tree_inner(&tree.root.borrow(), (None, None), 0);
-    println!("-----------\n");
+    // println!("-----------\n");
     res
 }
 
@@ -27,7 +27,7 @@ pub(crate) fn assert_is_b_tree_inner<
 
     match node {
         Node::Internal(node) => {
-            println!("(internal) parent key: {:?}, keys: {:?}", &left_parent_key, node.keys);
+            // println!("(internal) parent key: {:?}, keys: {:?}", &left_parent_key, node.keys);
             assert_at_node(
                 node.keys.len() == node.children.len(),
                 &left_parent_key,
@@ -98,7 +98,7 @@ pub(crate) fn assert_is_b_tree_inner<
             });
         }
         Node::Leaf(node) => {
-            println!("(leaf) parent_key: {:?} keys: {:?}", &left_parent_key, node.keys);
+            // println!("(leaf) parent_key: {:?} keys: {:?}", &left_parent_key, node.keys);
             assert_at_node(
                 node.keys.len() >= Q / 2,
                 &left_parent_key,

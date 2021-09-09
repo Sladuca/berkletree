@@ -10,6 +10,7 @@ use crate::node::Node;
 /// Struct that comprises all information needed to verify a Leaf Node, minus the key and value hash.
 /// it is assumed the the key and value hash will be known to the user, since they asked for the key
 /// when get() or insert() and they have the value.
+#[derive(Debug)]
 pub struct KVProof {
     pub(crate) idx: usize,
 	pub(crate) retrieved_key_counter: u8,
@@ -30,6 +31,7 @@ impl KVProof {
 }
 
 /// Struct that comprises all information needed to verify an Internal Node, minus the commitment
+#[derive(Debug)]
 pub struct InnerNodeProof<const MAX_KEY_LEN: usize> {
     pub(crate) idx: usize,
     pub(crate) key: KeyWithCounter<MAX_KEY_LEN>,
@@ -44,6 +46,7 @@ impl<const MAX_KEY_LEN: usize> InnerNodeProof<MAX_KEY_LEN> {
 	}
 }
 
+#[derive(Debug)]
 pub struct MembershipProof<const MAX_KEY_LEN: usize> {
 	/// KZG commitments for internal nodes of the audit path ordered in reverse.
 	/// The root node comes last, its child comes second to last, ...
@@ -60,6 +63,8 @@ pub struct MembershipProof<const MAX_KEY_LEN: usize> {
 impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
 	pub fn verify<'params, K: AsRef<[u8]>, const Q: usize>(&self, key: K, value_hash: Blake3Hash, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
 		let mut prev_child_hash = None;
+
+		println!("{:#?}", self);
 
 		// verify the audit path
 		for i in (0..self.path.len()).rev() {
