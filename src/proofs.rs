@@ -12,13 +12,19 @@ use crate::node::Node;
 /// when get() or insert() and they have the value.
 pub struct KVProof {
     pub(crate) idx: usize,
+	pub(crate) retrieved_key_counter: u8,
     pub(crate) commitment: KZGCommitment<Bls12>,
     pub(crate) witness: KZGWitness<Bls12>,
 }
 
 impl KVProof {
-	fn verify<'params, const Q: usize, const MAX_KEY_LEN: usize>(&self, key: &KeyWithCounter<MAX_KEY_LEN>, value_hash: Blake3Hash, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
-		let KVProof { idx, commitment, witness } = self;
+	pub fn verify<'params, K: AsRef<[u8]>, const Q: usize, const MAX_KEY_LEN: usize>(&self, key: K, value_hash: Blake3Hash, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
+		let KVProof { idx, retrieved_key_counter, commitment, witness } = self;
+
+		let mut key_padded = [0; MAX_KEY_LEN];
+		key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
+		let key = KeyWithCounter(key_padded, *retrieved_key_counter);
+
 		verifier.verify_eval((key.field_hash_with_idx(*idx).into(), FieldHash::from(value_hash).into()), commitment, witness)
 	}
 }
@@ -32,7 +38,7 @@ pub struct InnerNodeProof<const MAX_KEY_LEN: usize> {
 }
 
 impl<const MAX_KEY_LEN: usize> InnerNodeProof<MAX_KEY_LEN> {
-	fn verify<'params, const Q: usize>(&self, commitment: &KZGCommitment<Bls12>, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
+	pub fn verify<'params, const Q: usize>(&self, commitment: &KZGCommitment<Bls12>, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
 		let InnerNodeProof { idx, key, child_hash, witness } = self;
 		verifier.verify_eval((key.field_hash_with_idx(*idx).into(), (*child_hash).into()), commitment, witness)
 	}
@@ -52,7 +58,7 @@ pub struct MembershipProof<const MAX_KEY_LEN: usize> {
 }
 
 impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
-	fn verify<'params, const Q: usize>(&self, key: KeyWithCounter<MAX_KEY_LEN>, value_hash: Blake3Hash, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
+	pub fn verify<'params, K: AsRef<[u8]>, const Q: usize>(&self, key: K, value_hash: Blake3Hash, verifier: &KZGVerifier<'params, Bls12, Q>) -> bool {
 		let mut prev_child_hash = None;
 
 		// verify the audit path
@@ -67,6 +73,7 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
 					hasher.update(b"internal");
 					
 					if prev_child_hash != hasher.finalize().into() {
+						println!("child hash check failure at level {:?}", self.path.len() - 1 - i);
 						return false
 					}
 				},
@@ -75,6 +82,7 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
 
 			// verify the polynomal eval
 			if !self.path[i].verify(commitment, verifier) {
+				println!("polynomial eval check failure at level {:?}", self.path.len() - 1 - i);
 				return false;
 			}
 
@@ -89,6 +97,7 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
 				hasher.update(b"leaf");
 
 				if prev_child_hash != hasher.finalize().into() {
+					println!("leaf hash check failure");
 					return false
 				}
 			},
@@ -96,7 +105,7 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
 		}
 
 		// verify the leaf
-		!self.leaf.verify(&key, value_hash, verifier)
+		self.leaf.verify::<'_, K, Q, MAX_KEY_LEN>(key, value_hash, verifier)
 	}
 }
 

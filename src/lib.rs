@@ -1,9 +1,8 @@
-use bitvec::vec::BitVec;
 use blake3::Hash as Blake3Hash;
 use bls12_381::{Bls12, Scalar};
-use kzg::{KZGCommitment, KZGParams, KZGProver, KZGWitness};
+use kzg::{KZGParams, KZGProver};
 use std::{cell::RefCell, rc::Rc};
-use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
+use std::cmp::{Ord, PartialEq, PartialOrd};
 
 mod error;
 mod node;
@@ -230,7 +229,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 mod tests {
     use super::*;
     use fastrand::Rng;
-    use std::fmt::Debug;
+    use kzg::{KZGVerifier};
     use test_utils::*;
 
     const RAND_SEED: u64 = 42;
@@ -258,5 +257,14 @@ mod tests {
 
             assert_is_b_tree(&tree)
         }
+
+        let verifier = KZGVerifier::new(&params);
+
+        for (proof, (key, value)) in proofs.iter().zip(keys.iter().zip(values.iter())) {
+            let value_hash = blake3::hash(&value.to_le_bytes());
+
+            assert!(proof.verify(key.to_le_bytes(), value_hash, &verifier), "proof verification for ({:?}, {:?}) failed", key, value);
+        }
+
     }
 }

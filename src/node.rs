@@ -224,11 +224,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         left: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
         right: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
     ) -> Self {
-        let left_key = match left {
-            Node::Internal(ref node) => node.keys[0].clone(),
-            Node::Leaf(ref node) => node.keys[0].clone(),
-        };
-
         InternalNode {
             children: vec![left, right],
             keys: vec![null_key(), KeyWithCounter(key, 0)],
@@ -254,10 +249,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         if let Some(witness) = self.witnesses[idx] {
             witness
         } else {
-            println!("({:?}, {:?})", &self.keys[idx], match self.children[idx] {
-                Node::Internal(ref node) => &node.keys[0],
-                Node::Leaf(ref node) => &node.keys[0]
-            });
+            // println!("({:?}, {:?})", &self.keys[idx], match self.children[idx] {
+            //     Node::Internal(ref node) => &node.keys[0],
+            //     Node::Leaf(ref node) => &node.keys[0]
+            // });
             let x = self.keys[idx].field_hash_with_idx(idx).into();
             let y = self.children[idx].hash().unwrap().into();
             let witness = self.prover.create_witness((x, y)).unwrap();
@@ -394,7 +389,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             }
             None => {
                 let commitment = self.prover.commitment().unwrap();
-                println!("{}", idx);
                 let witness = self.get_witness(idx);
                 (
                     commitment,
@@ -523,7 +517,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         hash: Blake3Hash,
     ) -> (usize, Option<([u8; MAX_KEY_LEN], LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
         let mut key = KeyWithCounter(key.to_owned(), 0);
-        let mut idx = self.keys.partition_point(|k| key.0 > k.0);
+        let idx = self.keys.partition_point(|k| key.0 > k.0);
         if idx != 0 && self.keys[idx - 1] == key {
             key.1 = self.keys[idx - 1].1 + 1;
         }
@@ -570,6 +564,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     (
                         KVProof {
                             idx,
+                            retrieved_key_counter: new_node.keys[idx].1,
                             commitment,
                             witness,
                         },
@@ -581,6 +576,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     (
                         KVProof {
                             idx,
+                            retrieved_key_counter: self.keys[idx].1,
                             commitment,
                             witness,
                         },
@@ -594,6 +590,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 (
                     KVProof {
                         idx,
+                        retrieved_key_counter: self.keys[idx].1,
                         commitment,
                         witness,
                     },
@@ -631,6 +628,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     self.values[idx].clone(),
                     KVProof {
                         idx,
+                        retrieved_key_counter: self.keys[idx].1,
                         witness,
                         commitment,
                     },
@@ -641,6 +639,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     // key < smallest key
                     let right = KVProof {
                         idx,
+                        retrieved_key_counter: self.keys[idx].1,
                         commitment,
                         witness: self.get_witness(idx),
                     };
@@ -652,6 +651,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     // key > biggest key
                     let left = KVProof {
                         idx: idx - 1,
+                        retrieved_key_counter: self.keys[idx - 1].1,
                         commitment,
                         witness: self.get_witness(idx - 1),
                     };
