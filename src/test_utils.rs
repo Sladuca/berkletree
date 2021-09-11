@@ -20,7 +20,10 @@ pub(crate) fn assert_is_b_tree_inner<
     const MAX_VAL_LEN: usize,
 >(
     node: &Node<Q, MAX_KEY_LEN, MAX_VAL_LEN>,
-    parent_keys: (Option<KeyWithCounter<MAX_KEY_LEN>>, Option<KeyWithCounter<MAX_KEY_LEN>>),
+    parent_keys: (
+        Option<KeyWithCounter<MAX_KEY_LEN>>,
+        Option<KeyWithCounter<MAX_KEY_LEN>>,
+    ),
     level: usize,
 ) {
     let (left_parent_key, right_parent_key) = parent_keys;
@@ -32,14 +35,14 @@ pub(crate) fn assert_is_b_tree_inner<
                 node.keys.len() == node.children.len(),
                 &left_parent_key,
                 level,
-                "children.len() != keys.len()".to_string()
+                "children.len() != keys.len()".to_string(),
             );
 
             assert_at_node(
                 node.keys[0] == null_key(),
                 &left_parent_key,
                 level,
-                "0th key in node is not null key!".to_string()
+                "0th key in node is not null key!".to_string(),
             );
 
             assert_at_node(

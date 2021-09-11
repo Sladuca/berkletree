@@ -1,15 +1,22 @@
 use kzg::{
     polynomial::Polynomial, KZGBatchWitness, KZGCommitment, KZGParams, KZGProver, KZGWitness,
 };
-use std::{convert::{TryFrom, TryInto}, fmt, fmt::{Debug, Formatter}};
+use std::{
+    convert::{TryFrom, TryInto},
+    fmt,
+    fmt::{Debug, Formatter},
+};
 
 use blake3::{Hash as Blake3Hash, Hasher as Blake3Hasher};
 use bls12_381::{Bls12, Scalar};
 use either::Either;
 
 use crate::error::{BerkleError, NodeConvertError};
-use crate::{KeyWithCounter, null_key, FieldHash};
-use crate::proofs::{ContainsResult, GetResult, InnerNodeProof, KVProof, MembershipProof, NonMembershipProof, RangeIter, RangeResult};
+use crate::proofs::{
+    ContainsResult, GetResult, InnerNodeProof, KVProof, MembershipProof, NonMembershipProof,
+    RangeIter, RangeResult,
+};
+use crate::{null_key, FieldHash, KeyWithCounter};
 
 /// enum reprenting the different kinds of nodes for
 #[derive(Clone)]
@@ -66,19 +73,16 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     }
 }
 
-impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug
+    for Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+{
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Node::Internal(node) => {
-                f.debug_struct("InternalNode")
-                    .field("entries", node)
-                    .finish()
-            },
-            Node::Leaf(node) => {
-                f.debug_struct("LeafNode")
-                    .field("entries", node)
-                    .finish()
-            }
+            Node::Internal(node) => f
+                .debug_struct("InternalNode")
+                .field("entries", node)
+                .finish(),
+            Node::Leaf(node) => f.debug_struct("LeafNode").field("entries", node).finish(),
         }
     }
 }
@@ -86,37 +90,41 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
     Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
 {
-
     pub(crate) fn hash(&self) -> Result<FieldHash, BerkleError> {
         match self {
             Node::Internal(node) => node.hash(),
-            Node::Leaf(node) => node.hash()
-        } 
+            Node::Leaf(node) => node.hash(),
+        }
     }
 
     pub(crate) fn reinterpolate(&mut self) -> KZGCommitment<Bls12> {
         match self {
             Node::Internal(node) => node.reinterpolate(),
-            Node::Leaf(node) => node.reinterpolate()
+            Node::Leaf(node) => node.reinterpolate(),
         }
     }
-
 
     pub(crate) fn insert(
         &mut self,
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
-    ) -> (MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
+    ) -> (
+        MembershipProof<MAX_KEY_LEN>,
+        Option<(
+            [u8; MAX_KEY_LEN],
+            Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        )>,
+    ) {
         match self {
             Node::Internal(node) => {
                 let (proof, new_node) = node.insert(key, value, hash);
 
                 match new_node {
-					Some((key, node)) => (proof, Some((key, node.into()))),
-                    None => (proof, None)
+                    Some((key, node)) => (proof, Some((key, node.into()))),
+                    None => (proof, None),
                 }
-            },
+            }
             Node::Leaf(node) => {
                 let (proof, new_node) = node.insert(key, value, hash);
                 let proof = MembershipProof {
@@ -138,52 +146,62 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     }
 
     pub(crate) fn get(&mut self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
-        match self {
-            Node::Internal(node) => node.get(key),
-            Node::Leaf(node) => match node.get(key) {
-                Either::Left(LeafGetFound(val, leaf)) => GetResult::Found(
-                    val,
-                    MembershipProof {
-                        commitments: Vec::new(),
-                        path: Vec::new(),
-                        leaf,
-                    },
-                ),
-                Either::Right(res) => GetResult::NotFound(match res {
-                    LeafGetNotFound::Mid {
-                        idx,
-                        commitment,
-                        left_witness,
-                        left_key,
-                        right_witness,
-                        right_key,
-                    } => NonMembershipProof::IntraNode {
-                        path: Vec::new(),
-                        leaf_commitment: commitment,
-                        idx,
-                        left_key,
-                        left_witness,
-                        right_key,
-                        right_witness,
-                    },
-                    LeafGetNotFound::Left { right, right_key } => NonMembershipProof::Edge {
-                        is_left: true,
-                        path: Vec::new(),
-                        leaf_proof: right,
-                        key: right_key,
-                    },
-                    LeafGetNotFound::Right { left, left_key } => NonMembershipProof::Edge {
-                        is_left: false,
-                        path: Vec::new(),
-                        leaf_proof: left,
-                        key: left_key,
-                    },
-                }),
-            },
-        }
+        // match self {
+        //     Node::Internal(node) => node.get(key),
+        //     Node::Leaf(node) => match node.get(key) {
+        //         Either::Left(LeafGetFound(val, leaf)) => GetResult::Found(
+        //             val,
+        //             MembershipProof {
+        //                 commitments: Vec::new(),
+        //                 path: Vec::new(),
+        //                 leaf,
+        //             },
+        //         ),
+        //         Either::Right(res) => GetResult::NotFound(match res {
+        //             LeafGetNotFound::Mid {
+        //                 idx,
+        //                 commitment,
+        //                 left_witness,
+        //                 left_key,
+        //                 left_value,
+        //                 right_witness,
+        //                 right_key,
+        //                 right_value,
+        //             } => NonMembershipProof::IntraNode {
+        //                 path: Vec::new(),
+        //                 commitments: Vec::new(),
+        //                 leaf_commitment: commitment,
+        //                 idx,
+        //                 left_key,
+        //                 left_value,
+        //                 left_witness,
+        //                 right_key,
+        //                 right_value,
+        //                 right_witness,
+        //             },
+        //             LeafGetNotFound::Left { right, right_key, right_value} => NonMembershipProof::Edge {
+        //                 is_left: true,
+        //                 path: Vec::new(),
+        //                 commitments: Vec::new(),
+        //                 leaf_proof: right,
+        //                 key: right_key,
+        //                 value: right_value
+        //             },
+        //             LeafGetNotFound::Right { left, left_key, left_value } => NonMembershipProof::Edge {
+        //                 is_left: false,
+        //                 path: Vec::new(),
+        //                 commitments: Vec::new(),
+        //                 leaf_proof: left,
+        //                 key: left_key,
+        //                 value: left_value
+        //             },
+        //         }),
+        //     },
+        // }
+        unimplemented!()
     }
 
-    pub(crate) fn contains_key(&self, key: &[u8; MAX_KEY_LEN]) -> ContainsResult<MAX_KEY_LEN> {
+    pub(crate) fn contains_key(&self, key: &[u8; MAX_KEY_LEN]) -> ContainsResult<MAX_KEY_LEN, MAX_VAL_LEN> {
         unimplemented!()
     }
 
@@ -195,8 +213,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         unimplemented!()
     }
 }
-
-
 
 impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
     pub(crate) fn hash(&self) -> Blake3Hash {
@@ -232,7 +248,8 @@ pub struct InternalNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const
     pub(crate) prover: KZGProver<'params, Bls12, Q>,
 }
 
-impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug
+    for InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut m = &mut f.debug_map();
@@ -271,6 +288,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         let mut hasher = Blake3Hasher::new();
         hasher.update(&commitment.to_compressed());
         hasher.update(b"internal");
+        hasher.update(&self.keys.len().to_le_bytes());
+        
         Ok(hasher.finalize().into())
     }
 
@@ -310,7 +329,11 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             .map(|(i, k)| k.field_hash_with_idx(i).into())
             .collect();
 
-        let ys: Vec<Scalar> = self.children.iter_mut().map(|child| child.hash().unwrap().into()).collect();
+        let ys: Vec<Scalar> = self
+            .children
+            .iter_mut()
+            .map(|child| child.hash().unwrap().into())
+            .collect();
 
         let polynomial: Polynomial<Bls12, Q> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
@@ -323,9 +346,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         let (commitment, _, _) = self.reinterpolate_inner();
         commitment
     }
-    
+
     fn get_key_traversal_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
-        // find the last key that its' not less than
+        // find the last key that it's not less than
+        // in the case of dupes, finds the rightmost dupe
         let idx = self.keys.partition_point(|k| key >= &k.0);
         if idx != 0 {
             idx - 1
@@ -333,23 +357,35 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             idx
         }
     }
-    
+
     fn get_key_insertion_idx(&self, key: &[u8; MAX_KEY_LEN]) -> usize {
         // find the first key it's less than
         self.keys.partition_point(|k| key >= &k.0)
     }
-    
-    fn insert_inner(&mut self, key: &[u8; MAX_KEY_LEN], value: &[u8; MAX_VAL_LEN], hash: Blake3Hash) -> (usize, MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
+
+    fn insert_inner(
+        &mut self,
+        key: &[u8; MAX_KEY_LEN],
+        value: &[u8; MAX_VAL_LEN],
+        hash: Blake3Hash,
+    ) -> (
+        usize,
+        MembershipProof<MAX_KEY_LEN>,
+        Option<(
+            [u8; MAX_KEY_LEN],
+            InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        )>,
+    ) {
         let idx = self.get_key_traversal_idx(key);
 
         let (proof, new_node) = self.children[idx].insert(key, value, hash);
-        
+
         if let Some((split_key, child)) = new_node {
             let insertion_idx = self.get_key_insertion_idx(&split_key);
 
             let split_key = if insertion_idx != 0 && self.keys[insertion_idx - 1].0 == split_key {
                 KeyWithCounter(split_key, self.keys[insertion_idx - 1].1 + 1)
-            } else  {
+            } else {
                 KeyWithCounter(split_key, 0)
             };
 
@@ -357,7 +393,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             self.children.insert(insertion_idx, child);
 
             // after inserting, key may be in a different place
-            // this is a naive way of figuring it out, but this is a 
+            // this is a naive way of figuring it out, but this is a
             // 'mvp' tree that will likely be rewritten so it's fine
             let idx = self.get_key_traversal_idx(key);
 
@@ -368,7 +404,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 let split_key = right_keys[0].clone();
                 right_keys[0] = null_key();
                 let right_children = self.children.split_off(mid);
-           
+
                 let mut right = InternalNode {
                     children: right_children,
                     keys: right_keys,
@@ -396,12 +432,18 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
-    ) -> (MembershipProof<MAX_KEY_LEN>, Option<([u8; MAX_KEY_LEN], InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
+    ) -> (
+        MembershipProof<MAX_KEY_LEN>,
+        Option<(
+            [u8; MAX_KEY_LEN],
+            InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        )>,
+    ) {
         let (idx, mut proof, mut new_node) = self.insert_inner(key, value, hash);
 
         let (commitment, inner_proof) = match new_node {
             Some((_split_key, ref mut new_node)) => {
-                if idx >= self.keys.len() { 
+                if idx >= self.keys.len() {
                     let idx = idx - self.keys.len();
                     let commitment = new_node.prover.commitment().unwrap();
                     let witness = new_node.get_witness(idx);
@@ -409,9 +451,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         commitment,
                         InnerNodeProof {
                             idx,
+                            node_size: new_node.keys.len(),
                             key: new_node.keys[idx].clone(),
                             child_hash: new_node.children[idx].hash().unwrap(),
-                            witness
+                            witness,
                         },
                     )
                 } else {
@@ -421,9 +464,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         commitment,
                         InnerNodeProof {
                             idx,
+                            node_size: self.keys.len(),
                             key: self.keys[idx].clone(),
                             child_hash: self.children[idx].hash().unwrap(),
-                            witness
+                            witness,
                         },
                     )
                 }
@@ -435,9 +479,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     commitment,
                     InnerNodeProof {
                         idx: idx,
+                        node_size: self.keys.len(),
                         key: self.keys[idx].clone(),
                         child_hash: self.children[idx].hash().unwrap(),
-                        witness
+                        witness,
                     },
                 )
             }
@@ -445,13 +490,150 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
         proof.commitments.push(commitment);
         proof.path.push(inner_proof);
-       
+
         (proof, new_node)
     }
 
-    pub(crate) fn get(&self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
-        unimplemented!()
-    }
+    // pub(crate) fn get_inner(&mut self, idx: usize, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
+    //     match self.children[idx].get(key) {
+    //         GetResult::Found(value, mut proof) => {
+    //             let inner_proof = InnerNodeProof {
+    //                 idx,
+    //                 key: self.keys[idx],
+    //                 child_hash: self.children[idx].hash().unwrap(),
+    //                 witness: self.get_witness(idx)
+    //             };
+
+    //             proof.commitments.push(self.prover.commitment());
+    //             proof.path.push(inner_proof);
+
+    //             GetResult::Found(value, proof)
+    //         }
+    //         GetResult::NotFound(mut proof) => {
+    //             // backtrack through dupes until we find it or can't
+    //             if idx > 0 && self.keys[idx - 1].0 == key {
+    //                 self.get_inner(idx - 1, key)
+    //             } else {
+    //                 match proof {
+    //                     NonMembershipProof::IntraNode {
+    //                         mut path,
+    //                         mut commitments,
+    //                         leaf_commitment,
+    //                         idx,
+
+    //                         left_key,
+    //                         left_value,
+    //                         left_witness,
+
+    //                         right_key,
+    //                         right_value,
+    //                         right_witness
+    //                     } => {
+    //                         let inner_proof = InnerNodeProof {
+    //                             idx,
+    //                             node_size: self.keys.len(),
+    //                             key: self.keys[idx],
+    //                             child_hash: self.children[idx].hash().unwrap(),
+    //                             witness: self.get_witness(idx)
+    //                         };
+
+    //                         proof.commitments.push(self.prover.commitment());
+    //                         proof.path.push(inner_proof);
+
+    //                         GetResult::NotFound(NonMembershipProof::IntraNode {
+    //                             path,
+    //                             commitments,
+    //                             leaf_commitment,
+    //                             idx,
+
+    //                             left_key,
+    //                             left_value,
+    //                             left_witness,
+    //                             right_key,
+    //                             right_value,
+    //                             right_witness
+    //                         })
+    //                     },
+    //                     NonMembershipProof::InterNode {
+    //                         mut common_path,
+    //                         mut common_commitments,
+                            
+    //                         left,
+    //                         left_key,
+    //                         left_value,
+
+    //                         right,
+    //                         right_key,
+    //                         right_value,
+
+    //                         left_witness,
+    //                         right_witness
+    //                     } => {
+    //                         let inner_proof = InnerNodeProof {
+    //                             idx, 
+    //                             node_size: self.keys.len(),
+    //                             key: self.keys[idx],
+    //                             child_hash: self.children[idx].hash().unwrap(),
+    //                             witness: self.get_witness(idx)
+    //                         };
+
+    //                         common_path.push(inner_proof);
+    //                         common_commitments.push(self.prover.commitment());
+                            
+    //                         GetResult::NotFound(NonMembershipProof::InterNode {
+    //                             common_path,
+    //                             common_commitments,
+
+    //                             left,
+    //                             left_key,
+    //                             left_value,
+                                
+    //                             right,
+    //                             right_key,
+    //                             right_value,
+
+    //                             left_witness,
+    //                             right_witness
+    //                         })
+    //                     },
+    //                     NonMembershipProof::Edge {
+    //                         is_left,
+    //                         mut path,
+    //                         mut commitments,
+    //                         leaf_proof,
+    //                         key,
+    //                         value
+    //                     } => {
+    //                         let inner_proof = InnerNodeProof {
+    //                             idx,
+    //                             node_size: self.keys.len(),
+    //                             key: self.keys[idx],
+    //                             child_hash: self.children[idx].hash().unwrap(),
+    //                             witness: self.get_witness(idx)
+    //                         };
+
+    //                         path.push(inner_proof);
+    //                         commitments.push(self.prover.commitment());
+
+    //                         GetResult::NotFound(NonMembershipProof::Edge {
+    //                             is_left,
+    //                             path,
+    //                             commitments,
+    //                             leaf_proof,
+    //                             key,
+    //                             value
+    //                         })
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+
+    // pub(crate) fn get(&mut self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
+    //     let mut idx = self.get_key_traversal_idx(key);
+    //     self.get_inner(idx, key)
+    // }
 }
 
 #[derive(Clone)]
@@ -466,7 +648,8 @@ pub struct LeafNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX
     // no sibling pointers yet
 }
 
-impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug
+    for LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut m = &mut f.debug_map();
@@ -479,14 +662,16 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 }
 
 pub(crate) struct LeafGetFound<const MAX_VAL_LEN: usize>([u8; MAX_VAL_LEN], KVProof);
-pub(crate) enum LeafGetNotFound<const MAX_KEY_LEN: usize> {
+pub(crate) enum LeafGetNotFound<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     Left {
         right: KVProof,
         right_key: KeyWithCounter<MAX_KEY_LEN>,
+        right_value: [u8; MAX_VAL_LEN],
     },
     Right {
         left: KVProof,
         left_key: KeyWithCounter<MAX_KEY_LEN>,
+        left_value: [u8; MAX_VAL_LEN],
     },
     Mid {
         idx: usize,
@@ -494,9 +679,11 @@ pub(crate) enum LeafGetNotFound<const MAX_KEY_LEN: usize> {
 
         left_witness: KZGWitness<Bls12>,
         left_key: KeyWithCounter<MAX_KEY_LEN>,
+        left_value: [u8; MAX_VAL_LEN],
 
         right_witness: KZGWitness<Bls12>,
         right_key: KeyWithCounter<MAX_KEY_LEN>,
+        right_value: [u8; MAX_VAL_LEN],
     },
 }
 
@@ -525,6 +712,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         let mut hasher = Blake3Hasher::new();
         hasher.update(&commitment.to_compressed());
         hasher.update(b"leaf");
+        hasher.update(&self.keys.len().to_le_bytes());
+
         Ok(hasher.finalize().into())
     }
 
@@ -537,7 +726,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             .collect();
 
         let ys: Vec<Scalar> = self.hashes.iter().map(|&k| k.into()).collect();
-
 
         let polynomial: Polynomial<Bls12, Q> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
@@ -568,7 +756,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
-    ) -> (usize, Option<([u8; MAX_KEY_LEN], LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
+    ) -> (
+        usize,
+        Option<(
+            [u8; MAX_KEY_LEN],
+            LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        )>,
+    ) {
         let mut key = KeyWithCounter(key.to_owned(), 0);
         let idx = self.keys.partition_point(|k| key.0 >= k.0);
         if idx != 0 && self.keys[idx - 1] == key {
@@ -604,7 +798,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         key: &[u8; MAX_KEY_LEN],
         value: &[u8; MAX_VAL_LEN],
         hash: Blake3Hash,
-    ) -> (KVProof, Option<([u8; MAX_KEY_LEN], LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>)>) {
+    ) -> (
+        KVProof,
+        Option<(
+            [u8; MAX_KEY_LEN],
+            LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        )>,
+    ) {
         let (idx, new_node) = self.insert_inner(key, value, hash);
 
         // if value is in new node, proof needs to come from new node
@@ -617,38 +817,41 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     (
                         KVProof {
                             idx,
+                            node_size: new_node.keys.len(),
                             retrieved_key_counter: new_node.keys[idx].1,
                             commitment,
                             witness,
                         },
-                        Some((split_key, new_node))
-                    )                    
+                        Some((split_key, new_node)),
+                    )
                 } else {
                     let commitment = self.prover.commitment().unwrap();
                     let witness = self.get_witness(idx);
                     (
                         KVProof {
                             idx,
+                            node_size: self.keys.len(),
                             retrieved_key_counter: self.keys[idx].1,
                             commitment,
                             witness,
                         },
-                        Some((split_key, new_node))
+                        Some((split_key, new_node)),
                     )
                 }
-            },
+            }
             None => {
                 let commitment = self.prover.commitment().unwrap();
                 let witness = self.get_witness(idx);
                 (
                     KVProof {
                         idx,
+                        node_size: self.keys.len(),
                         retrieved_key_counter: self.keys[idx].1,
                         commitment,
                         witness,
                     },
-                    None 
-                )                    
+                    None,
+                )
             }
         }
     }
@@ -669,7 +872,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     pub(crate) fn get(
         &mut self,
         key: &[u8; MAX_KEY_LEN],
-    ) -> Either<LeafGetFound<MAX_VAL_LEN>, LeafGetNotFound<MAX_KEY_LEN>> {
+    ) -> Either<LeafGetFound<MAX_VAL_LEN>, LeafGetNotFound<MAX_KEY_LEN, MAX_VAL_LEN>> {
         let commitment = self
             .prover
             .commitment()
@@ -681,6 +884,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     self.values[idx].clone(),
                     KVProof {
                         idx,
+                        node_size: self.keys.len(),
                         retrieved_key_counter: self.keys[idx].1,
                         witness,
                         commitment,
@@ -692,6 +896,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     // key < smallest key
                     let right = KVProof {
                         idx,
+                        node_size: self.keys.len(),
                         retrieved_key_counter: self.keys[idx].1,
                         commitment,
                         witness: self.get_witness(idx),
@@ -699,11 +904,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     LeafGetNotFound::Left {
                         right,
                         right_key: self.keys[idx].clone(),
+                        right_value: self.values[idx].clone()
                     }
                 } else if idx == self.keys.len() {
                     // key > biggest key
                     let left = KVProof {
                         idx: idx - 1,
+                        node_size: self.keys.len(),
                         retrieved_key_counter: self.keys[idx - 1].1,
                         commitment,
                         witness: self.get_witness(idx - 1),
@@ -711,6 +918,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     LeafGetNotFound::Right {
                         left,
                         left_key: self.keys[idx - 1].clone(),
+                        left_value: self.values[idx].clone()
                     }
                 } else {
                     // key within the node
@@ -719,8 +927,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         commitment,
                         left_witness: self.get_witness(idx - 1),
                         left_key: self.keys[idx - 1].clone(),
+                        left_value: self.values[idx - 1].clone(),
                         right_witness: self.get_witness(idx),
-                        right_key: self.keys[idx].clone()
+                        right_key: self.keys[idx].clone(),
+                        right_value: self.values[idx].clone()
                     }
                 })
             }

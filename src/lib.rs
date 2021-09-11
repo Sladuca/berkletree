@@ -1,8 +1,13 @@
 use blake3::Hash as Blake3Hash;
 use bls12_381::{Bls12, Scalar};
 use kzg::{KZGParams, KZGProver};
-use std::{cell::RefCell, rc::Rc, fmt, fmt::{Debug, Formatter}};
 use std::cmp::{Ord, PartialEq, PartialOrd};
+use std::{
+    cell::RefCell,
+    fmt,
+    fmt::{Debug, Formatter},
+    rc::Rc,
+};
 
 mod error;
 mod node;
@@ -13,7 +18,7 @@ mod test_utils;
 
 use error::BerkleError;
 use node::{InternalNode, LeafNode, Node};
-use proofs::{MembershipProof, GetResult, RangeResult, ContainsResult, InnerNodeProof};
+use proofs::{ContainsResult, GetResult, InnerNodeProof, MembershipProof, RangeResult};
 
 /// this wrapper struct denotes a hash that lies in Bls12_381's Scalar Field
 /// it is computed by chopping off the two most-significant bits of the hash
@@ -85,7 +90,7 @@ impl<const MAX_KEY_LEN: usize> AsRef<[u8]> for KeyWithCounter<MAX_KEY_LEN> {
 
 impl<const MAX_KEY_LEN: usize> From<KeyWithCounter<MAX_KEY_LEN>> for [u8; MAX_KEY_LEN] {
     fn from(k: KeyWithCounter<MAX_KEY_LEN>) -> Self {
-       k.0 
+        k.0
     }
 }
 
@@ -100,14 +105,15 @@ pub struct BerkleTree<'params, const Q: usize, const MAX_KEY_LEN: usize, const M
     root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
 }
 
-impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug for BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug
+    for BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+{
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("BerkleTree")
             .field("root", &self.root.borrow())
             .finish()
     }
 }
-
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
     BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
@@ -143,13 +149,16 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             let mut value_padded = [0; MAX_VAL_LEN];
             value_padded[0..value.len()].copy_from_slice(value.as_ref());
 
-            let (mut proof, new_node) = self.root.borrow_mut().insert(&key_padded, &value_padded, hash);
+            let (mut proof, new_node) =
+                self.root
+                    .borrow_mut()
+                    .insert(&key_padded, &value_padded, hash);
 
             match new_node {
                 Some((split_key, child)) => {
                     let proof_in_new_node = key_padded >= split_key;
 
-                    let new_root= InternalNode {
+                    let new_root = InternalNode {
                         keys: vec![null_key(), KeyWithCounter::new(split_key, 0)],
                         children: vec![child],
                         witnesses: vec![None; Q],
@@ -165,25 +174,25 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             new_root.children.insert(0, old_root);
 
                             let idx = if proof_in_new_node { 1 } else { 0 };
-                            let (commitment, witness) = new_root.reinterpolate_and_create_witness(idx);
+                            let (commitment, witness) =
+                                new_root.reinterpolate_and_create_witness(idx);
                             let inner_proof = InnerNodeProof {
                                 idx,
+                                node_size: new_root.keys.len(),
                                 key: new_root.keys[idx].clone().into(),
                                 child_hash: new_root.children[idx].hash().unwrap(),
-                                witness
+                                witness,
                             };
 
                             proof.path.push(inner_proof);
                             proof.commitments.push(commitment);
-                        },
-                        Node::Leaf(_) => panic!("should never happen!")
+                        }
+                        Node::Leaf(_) => panic!("should never happen!"),
                     };
 
                     Ok(proof)
-                },
-                None => {
-                    Ok(proof)
                 }
+                None => Ok(proof),
             }
         }
     }
@@ -194,20 +203,22 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     ) -> Result<Vec<MembershipProof<MAX_KEY_LEN>>, BerkleError>
     where
         K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
     {
         unimplemented!()
     }
 
-
-    pub fn get<K, V>(&mut self, key: &K) -> Result<GetResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
+    pub fn get<K>(&mut self, key: &K) -> Result<GetResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
-        unimplemented!()
+        let mut key_padded = [0; MAX_KEY_LEN];
+        key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
+
+        Ok(self.root.borrow_mut().get(&key_padded))
     }
 
-
-    pub fn contains_key<K>(&mut self, key: &K) -> Result<ContainsResult<MAX_KEY_LEN>, BerkleError>
+    pub fn contains_key<K>(&mut self, key: &K) -> Result<ContainsResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
@@ -237,7 +248,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 mod tests {
     use super::*;
     use fastrand::Rng;
-    use kzg::{KZGVerifier};
+    use kzg::KZGVerifier;
     use test_utils::*;
 
     const RAND_SEED: u64 = 42;
@@ -247,7 +258,6 @@ mod tests {
         let s: Scalar = rng.u64(0..u64::MAX).into();
         kzg::setup(s)
     }
-
 
     #[test]
     fn test_insert() {
@@ -261,13 +271,20 @@ mod tests {
 
         for (key, value) in keys.iter().zip(values.iter()) {
             let hash = blake3::hash(&value.to_le_bytes());
-            let proof = tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash).unwrap();
+            let proof = tree
+                .insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
 
             assert_is_b_tree(&tree);
 
             println!("------\n");
             println!("{:#?}", tree);
-            assert!(proof.verify(key.to_le_bytes(), hash, &verifier), "proof verification for ({:?}, {:?}) failed", key, value);
+            assert!(
+                proof.verify(&key.to_le_bytes(), hash, &verifier),
+                "proof verification for ({:?}, {:?}) failed",
+                key,
+                value
+            );
         }
 
         // with dupes
@@ -277,13 +294,63 @@ mod tests {
 
         for (key, value) in keys.iter().zip(values.iter()) {
             let hash = blake3::hash(&value.to_le_bytes());
-            let proof = tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash).unwrap();
+            let proof = tree
+                .insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
 
             assert_is_b_tree(&tree);
 
             println!("------\n");
             println!("{:#?}", tree);
-            assert!(proof.verify(key.to_le_bytes(), hash, &verifier), "proof verification for ({:?}, {:?}) failed", key, value);
+            assert!(
+                proof.verify(&key.to_le_bytes(), hash, &verifier),
+                "proof verification for ({:?}, {:?}) failed",
+                key,
+                value
+            );
+        }
+    }
+
+    fn test_get() {
+        let params = test_setup::<3>();
+        let verifier = KZGVerifier::new(&params);
+        let mut tree = BerkleTree::<3, 4, 4>::new(&params);
+
+        // build tree
+        let keys: Vec<u32> = vec![8, 2, 12, 1, 1, 3, 5, 9, 12];
+        let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let hash = blake3::hash(&value.to_le_bytes());
+            tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
+        }
+
+        // get stuff that exists in tree
+        let search_key_idxs: Vec<usize> = vec![0, 5, 7, 8, 4];
+
+        for &i in search_key_idxs.iter() {
+            let res = tree.get(&keys[i].to_le_bytes()).unwrap();
+            match res {
+                GetResult::Found(value, proof) => {
+                    assert_eq!(values[i].to_le_bytes(), value);
+                    assert!(proof.verify(&keys[i].to_le_bytes(), blake3::hash(&value), &verifier));
+                }
+                GetResult::NotFound(_proof) => panic!("expected key {} to be in tree!", keys[i]),
+            }
+        }
+
+        // get stuff that doesn't exist in tree
+        let search_keys: Vec<u32> = vec![4, 10, 99, 0, 7];
+        for &key in search_keys.iter() {
+            let res = tree.get(&key.to_le_bytes()).unwrap();
+
+            match res {
+                GetResult::NotFound(proof) => {
+                    // TODO
+                }
+                GetResult::Found(_, _) => panic!("expected key {} to not be in tree!", key),
+            }
         }
     }
 }
