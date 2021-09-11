@@ -165,6 +165,7 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
         path: Vec<InnerNodeProof<MAX_KEY_LEN>>,
 		commitments: Vec<KZGCommitment<Bls12>>,
         leaf_commitment: KZGCommitment<Bls12>,
+        leaf_size: usize, 
         // idx of left key
         idx: usize,
 
@@ -203,161 +204,166 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
     },
 }
 
-// impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN> {
-//     fn verify<'params, K, const Q: usize>(
-//         &self,
-//         key: &K,
-//         verifier: &KZGVerifier<'params, Bls12, Q>,
-//     ) -> bool
-//     where
-//         K: AsRef<[u8]>,
-//     {
-//         match self {
-//             NonMembershipProof::IntraNode {
-//                 path,
-//                 leaf_commitment,
-//                 commitments,
-//                 idx,
+impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN> {
+    fn verify<'params, K, const Q: usize>(
+        &self,
+        key: &K,
+        verifier: &KZGVerifier<'params, Bls12, Q>,
+    ) -> bool
+    where
+        K: AsRef<[u8]>,
+    {
+        let key = key.as_ref();
+        match self {
+            NonMembershipProof::IntraNode {
+                path,
+                commitments,
 
-//                 left_key,
-// 				left_value,
-//                 left_witness,
+                leaf_commitment,
+                leaf_size,
+                idx,
 
-//                 right_key,
-// 				right_value,
-//                 right_witness,
-//             } => {
-// 				if key <= left_key || key >= right_key {
-// 					false
-// 				} else {
+                left_key,
+				left_value,
+                left_witness,
 
-//                     let (path_ok, prev_child_hash) = verify_path(None, &self.path, &self.commitments, verifier);
-//                     if !path_ok {
-//                         return false;
-//                     }
+                right_key,
+				right_value,
+                right_witness,
+            } => {
+				if key <= &left_key.0 || key >= &right_key.0 {
+					false
+				} else {
 
-//                     // check the last hash
-//                     if let Some(prev_child_hash) = prev_child_hash {
-//                         let mut hasher = Blake3Hasher::new();
-//                         hasher.update(&self.leaf.commitment.inner().to_compressed());
-//                         hasher.update(b"leaf");
-//                         hasher.update(&self.leaf.node_size.to_le_bytes());
+                    let (path_ok, prev_child_hash) = verify_path(None, &path, &commitments, verifier);
+                    if !path_ok {
+                        return false;
+                    }
 
-//                         if prev_child_hash != hasher.finalize().into() {
-//                             println!("leaf hash check failure");
-//                             return false;
-//                         }
-//                     }
+                    // check the last hash
+                    if let Some(prev_child_hash) = prev_child_hash {
+                        let mut hasher = Blake3Hasher::new();
+                        hasher.update(&leaf_commitment.inner().to_compressed());
+                        hasher.update(b"leaf");
+                        hasher.update(&leaf_size.to_le_bytes());
 
-// 					// verify the keys to the left and right
-// 					let left_idx = idx - 1;
-// 					let right_idx = *idx;
+                        if prev_child_hash != hasher.finalize().into() {
+                            println!("leaf hash check failure");
+                            return false;
+                        }
+                    }
 
-// 					verifier.verify_eval(
-// 						(
-// 							left_key.field_hash_with_idx(left_idx).into(),
-// 							FieldHash::from(blake3::hash(left_value)).into()
-// 						),
-// 						leaf_commitment,
-// 						left_witness
-// 					) && verifier.verify_eval(
-// 						(
-// 							right_key.field_hash_with_idx(right_idx).into(),
-// 							FieldHash::from(blake3::hash(right_value)).into()
-// 						),
-// 						leaf_commitment,
-// 						right_witness
-// 					)
-// 				}
-//             }
-//             NonMembershipProof::InterNode {
-//                 common_path,
-//                 common_commitments,
+					// verify the keys to the left and right
+					let left_idx = idx - 1;
+					let right_idx = *idx;
 
-//                 left,
-//                 left_key,
-// 				left_value,
-//                 left_path,
-//                 left_commitments,
+					verifier.verify_eval(
+						(
+							left_key.field_hash_with_idx(left_idx).into(),
+							FieldHash::from(blake3::hash(left_value)).into()
+						),
+						leaf_commitment,
+						left_witness
+					) && verifier.verify_eval(
+						(
+							right_key.field_hash_with_idx(right_idx).into(),
+							FieldHash::from(blake3::hash(right_value)).into()
+						),
+						leaf_commitment,
+						right_witness
+					)
+				}
+            }
+            NonMembershipProof::InterNode {
+                common_path,
+                common_commitments,
 
-//                 right,
-//                 right_key,
-// 				right_value,
-//                 right_path,
-//                 right_commitments,
-//             } => {
-// 				if key <= left_key || key >= right_key {
-// 					false
-// 				} else {
+                left,
+                left_key,
+				left_value,
+                left_path,
+                left_commitments,
 
-//                     let mut common_path_child_hash: Option<FieldHash> = None;
+                right,
+                right_key,
+				right_value,
+                right_path,
+                right_commitments,
+            } => {
+				if key <= &left_key.0 || key >= &right_key.0 {
+					false
+				} else {
 
-//                     if let Some(ref common_path, common_commitments) = (self.common_path, self.common_commitments) {
-//                         let (path_ok, prev_child_hash) = verify_path(None, common_path, common_commitments, verifier);
-//                         if !path_ok {
-//                             return false;
-//                         }
+                    let mut common_path_child_hash: Option<FieldHash> = None;
 
-//                         common_path_child_hash = Some(prev_child_hash);
-//                     }
+                    if let (Some(ref common_path), Some(common_commitments)) = (common_path, common_commitments) {
+                        let (path_ok, prev_child_hash) = verify_path(None, common_path, common_commitments, verifier);
+                        if !path_ok {
+                            return false;
+                        }
 
-//                     // verify the left and right paths & leaf hashes
-//                     if let Some(common_path_child_hash) = common_path_child_hash {
-//                         // left
-//                         let (path_ok, prev_child_hash) = verify_path(common_path_child_hash.clone(), &self.left_path, &self.left_commitments, verifier);
-//                         if !path_ok {
-//                             return false;
-//                         }
+                        common_path_child_hash = prev_child_hash;
+                    }
 
-//                         if let Some(prev_child_hash) = prev_child_hash {
-//                             let mut hasher = Blake3Hasher::new();
-//                             hasher.update(&self.left.commitment.inner().to_compressed());
-//                             hasher.update(b"leaf");
+                    // verify the left and right paths & leaf hashes
+                    if let Some(common_path_child_hash) = common_path_child_hash {
+                        // left
+                        let (path_ok, prev_child_hash) = verify_path(Some(common_path_child_hash.clone()), &left_path, &left_commitments, verifier);
+                        if !path_ok {
+                            return false;
+                        }
 
-//                             if prev_child_hash != hasher.finalize().into() {
-//                                 println!("left leaf hash check failure");
-//                                 return false;
-//                             }
-//                         }
+                        if let Some(prev_child_hash) = prev_child_hash {
+                            let mut hasher = Blake3Hasher::new();
+                            hasher.update(&left.commitment.inner().to_compressed());
+                            hasher.update(b"leaf");
+                            hasher.update(&left.node_size.to_le_bytes());
 
-//                         // right
-//                         let (path_ok, prev_child_hash) = verify_path(common_path_child_hash, &self.right_path, &self.right_commitments, verifier);
-//                         if !path_ok {
-//                             return false;
-//                         }
+                            if prev_child_hash != hasher.finalize().into() {
+                                println!("left leaf hash check failure");
+                                return false;
+                            }
+                        }
 
-//                         if let Some(prev_child_hash) = prev_child_hash {
-//                             let mut hasher = Blake3Hasher::new();
-//                             hasher.update(&self.right.commitment.inner().to_compressed());
-//                             hasher.update(b"leaf");
-//                             hasher.update(&self.right.node_size.to_le_bytes());
+                        // right
+                        let (path_ok, prev_child_hash) = verify_path(Some(common_path_child_hash), &right_path, &right_commitments, verifier);
+                        if !path_ok {
+                            return false;
+                        }
 
-//                             if prev_child_hash != hasher.finalize().into() {
-//                                 println!("left leaf hash check failure");
-//                                 return false;
-//                             }
+                        if let Some(prev_child_hash) = prev_child_hash {
+                            let mut hasher = Blake3Hasher::new();
+                            hasher.update(&right.commitment.inner().to_compressed());
+                            hasher.update(b"leaf");
+                            hasher.update(&right.node_size.to_le_bytes());
 
-//                         }
-//                     }
+                            if prev_child_hash != hasher.finalize().into() {
+                                println!("left leaf hash check failure");
+                                return false;
+                            }
 
-//                     // verify leaf proofs
-//                     self.left.verify(&self.left_key, blake3::hash(&self.left_value), verifier) && self.right.verify(&self.right_key, blake3::hash(&self.right_value), verifier)
-//                 }
-//             }
-//             NonMembershipProof::Edge {
-//                 is_left,
-//                 path,
-//                 commitments,
-//                 leaf_proof,
-//                 key,
-// 				value,
-//             } => {
-//                 // TODO is this mathematically correct
-//                 unimplemented!();
-//             }
-//         }
-//     }
-// }
+                        }
+                    }
+
+                    // verify leaf proofs
+                    left.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(&left_key.0, blake3::hash(left_value), verifier)
+                        && right.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(&right_key.0, blake3::hash(right_value), verifier)
+                }
+            }
+            NonMembershipProof::Edge {
+                is_left,
+                path,
+                commitments,
+                leaf_proof,
+                key,
+				value,
+            } => {
+                // TODO is this mathematically correct
+                unimplemented!();
+            }
+        }
+    }
+}
 
 pub enum RangePath<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     KeyExists(MembershipProof<MAX_KEY_LEN>),

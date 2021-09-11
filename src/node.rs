@@ -146,59 +146,62 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     }
 
     pub(crate) fn get(&mut self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
-        // match self {
-        //     Node::Internal(node) => node.get(key),
-        //     Node::Leaf(node) => match node.get(key) {
-        //         Either::Left(LeafGetFound(val, leaf)) => GetResult::Found(
-        //             val,
-        //             MembershipProof {
-        //                 commitments: Vec::new(),
-        //                 path: Vec::new(),
-        //                 leaf,
-        //             },
-        //         ),
-        //         Either::Right(res) => GetResult::NotFound(match res {
-        //             LeafGetNotFound::Mid {
-        //                 idx,
-        //                 commitment,
-        //                 left_witness,
-        //                 left_key,
-        //                 left_value,
-        //                 right_witness,
-        //                 right_key,
-        //                 right_value,
-        //             } => NonMembershipProof::IntraNode {
-        //                 path: Vec::new(),
-        //                 commitments: Vec::new(),
-        //                 leaf_commitment: commitment,
-        //                 idx,
-        //                 left_key,
-        //                 left_value,
-        //                 left_witness,
-        //                 right_key,
-        //                 right_value,
-        //                 right_witness,
-        //             },
-        //             LeafGetNotFound::Left { right, right_key, right_value} => NonMembershipProof::Edge {
-        //                 is_left: true,
-        //                 path: Vec::new(),
-        //                 commitments: Vec::new(),
-        //                 leaf_proof: right,
-        //                 key: right_key,
-        //                 value: right_value
-        //             },
-        //             LeafGetNotFound::Right { left, left_key, left_value } => NonMembershipProof::Edge {
-        //                 is_left: false,
-        //                 path: Vec::new(),
-        //                 commitments: Vec::new(),
-        //                 leaf_proof: left,
-        //                 key: left_key,
-        //                 value: left_value
-        //             },
-        //         }),
-        //     },
-        // }
-        unimplemented!()
+        match self {
+            Node::Internal(node) => node.get(key),
+            Node::Leaf(node) => match node.get(key) {
+                Either::Left(LeafGetFound(val, leaf)) => GetResult::Found(
+                    val,
+                    MembershipProof {
+                        commitments: Vec::new(),
+                        path: Vec::new(),
+                        leaf,
+                    },
+                ),
+                Either::Right(res) => GetResult::NotFound(match res {
+                    LeafGetNotFound::Mid {
+                        idx,
+                        leaf_size,
+                        commitment,
+
+                        left_witness,
+                        left_key,
+                        left_value,
+                        right_witness,
+                        right_key,
+                        right_value,
+                    } => NonMembershipProof::IntraNode {
+                        path: Vec::new(),
+                        commitments: Vec::new(),
+
+                        leaf_commitment: commitment,
+                        leaf_size,
+                        idx,
+                        left_key,
+                        left_value,
+                        left_witness,
+                        right_key,
+                        right_value,
+                        right_witness,
+                    },
+                    LeafGetNotFound::Left { right, right_key, right_value} => NonMembershipProof::Edge {
+                        is_left: true,
+                        path: Vec::new(),
+                        commitments: Vec::new(),
+                        leaf_proof: right,
+                        key: right_key,
+                        value: right_value
+                    },
+                    LeafGetNotFound::Right { left, left_key, left_value } => NonMembershipProof::Edge {
+                        is_left: false,
+                        path: Vec::new(),
+                        commitments: Vec::new(),
+                        leaf_proof: left,
+                        key: left_key,
+                        value: left_value
+                    },
+                }),
+            },
+        }
     }
 
     pub(crate) fn contains_key(&self, key: &[u8; MAX_KEY_LEN]) -> ContainsResult<MAX_KEY_LEN, MAX_VAL_LEN> {
@@ -289,7 +292,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         hasher.update(&commitment.to_compressed());
         hasher.update(b"internal");
         hasher.update(&self.keys.len().to_le_bytes());
-        
+
         Ok(hasher.finalize().into())
     }
 
@@ -494,146 +497,167 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         (proof, new_node)
     }
 
-    // pub(crate) fn get_inner(&mut self, idx: usize, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
-    //     match self.children[idx].get(key) {
-    //         GetResult::Found(value, mut proof) => {
-    //             let inner_proof = InnerNodeProof {
-    //                 idx,
-    //                 key: self.keys[idx],
-    //                 child_hash: self.children[idx].hash().unwrap(),
-    //                 witness: self.get_witness(idx)
-    //             };
+    pub(crate) fn get_inner(&mut self, idx: usize, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
+        match self.children[idx].get(key) {
+            GetResult::Found(value, mut proof) => {
+                let inner_proof = InnerNodeProof {
+                    idx,
+                    node_size: self.keys.len(),
+                    key: self.keys[idx].clone(),
+                    child_hash: self.children[idx].hash().unwrap(),
+                    witness: self.get_witness(idx)
+                };
 
-    //             proof.commitments.push(self.prover.commitment());
-    //             proof.path.push(inner_proof);
+                proof.commitments.push(self.prover.commitment().unwrap());
+                proof.path.push(inner_proof);
 
-    //             GetResult::Found(value, proof)
-    //         }
-    //         GetResult::NotFound(mut proof) => {
-    //             // backtrack through dupes until we find it or can't
-    //             if idx > 0 && self.keys[idx - 1].0 == key {
-    //                 self.get_inner(idx - 1, key)
-    //             } else {
-    //                 match proof {
-    //                     NonMembershipProof::IntraNode {
-    //                         mut path,
-    //                         mut commitments,
-    //                         leaf_commitment,
-    //                         idx,
+                GetResult::Found(value, proof)
+            }
+            GetResult::NotFound(proof) => {
+                // backtrack through dupes until we find it or can't
+                if idx > 0 && &self.keys[idx - 1].0 == key {
+                    self.get_inner(idx - 1, key)
+                } else {
+                    match proof {
+                        NonMembershipProof::IntraNode {
+                            mut path,
+                            mut commitments,
 
-    //                         left_key,
-    //                         left_value,
-    //                         left_witness,
+                            leaf_commitment,
+                            leaf_size,
+                            idx,
 
-    //                         right_key,
-    //                         right_value,
-    //                         right_witness
-    //                     } => {
-    //                         let inner_proof = InnerNodeProof {
-    //                             idx,
-    //                             node_size: self.keys.len(),
-    //                             key: self.keys[idx],
-    //                             child_hash: self.children[idx].hash().unwrap(),
-    //                             witness: self.get_witness(idx)
-    //                         };
+                            left_key,
+                            left_value,
+                            left_witness,
 
-    //                         proof.commitments.push(self.prover.commitment());
-    //                         proof.path.push(inner_proof);
+                            right_key,
+                            right_value,
+                            right_witness
+                        } => {
+                            let inner_proof = InnerNodeProof {
+                                idx,
+                                node_size: self.keys.len(),
+                                key: self.keys[idx].clone(),
+                                child_hash: self.children[idx].hash().unwrap(),
+                                witness: self.get_witness(idx)
+                            };
 
-    //                         GetResult::NotFound(NonMembershipProof::IntraNode {
-    //                             path,
-    //                             commitments,
-    //                             leaf_commitment,
-    //                             idx,
+                            commitments.push(self.prover.commitment().unwrap());
+                            path.push(inner_proof);
 
-    //                             left_key,
-    //                             left_value,
-    //                             left_witness,
-    //                             right_key,
-    //                             right_value,
-    //                             right_witness
-    //                         })
-    //                     },
-    //                     NonMembershipProof::InterNode {
-    //                         mut common_path,
-    //                         mut common_commitments,
+                            GetResult::NotFound(NonMembershipProof::IntraNode {
+                                path,
+                                commitments,
+
+                                leaf_commitment,
+                                leaf_size,
+                                idx,
+
+                                left_key,
+                                left_value,
+                                left_witness,
+                                right_key,
+                                right_value,
+                                right_witness
+                            })
+                        },
+                        NonMembershipProof::InterNode {
+                            mut common_path,
+                            mut common_commitments,
                             
-    //                         left,
-    //                         left_key,
-    //                         left_value,
+                            left,
+                            left_key,
+                            left_value,
+                            left_path,
+                            left_commitments,
 
-    //                         right,
-    //                         right_key,
-    //                         right_value,
+                            right,
+                            right_key,
+                            right_value,
+                            right_path,
+                            right_commitments,
+                        } => {
+                            let inner_proof = InnerNodeProof {
+                                idx, 
+                                node_size: self.keys.len(),
+                                key: self.keys[idx].clone(),
+                                child_hash: self.children[idx].hash().unwrap(),
+                                witness: self.get_witness(idx)
+                            };
 
-    //                         left_witness,
-    //                         right_witness
-    //                     } => {
-    //                         let inner_proof = InnerNodeProof {
-    //                             idx, 
-    //                             node_size: self.keys.len(),
-    //                             key: self.keys[idx],
-    //                             child_hash: self.children[idx].hash().unwrap(),
-    //                             witness: self.get_witness(idx)
-    //                         };
+                            common_path = match common_path {
+                                Some(mut common_path) => {
+                                    common_path.push(inner_proof);
+                                    Some(common_path)
+                                },
+                                None => Some(vec![inner_proof])
+                            };
 
-    //                         common_path.push(inner_proof);
-    //                         common_commitments.push(self.prover.commitment());
+                            common_commitments = match common_commitments {
+                                Some(mut common_commitments) => {
+                                    common_commitments.push(self.prover.commitment().unwrap());
+                                    Some(common_commitments)
+                                },
+                                None => Some(vec![self.prover.commitment().unwrap()])
+                            };
+
                             
-    //                         GetResult::NotFound(NonMembershipProof::InterNode {
-    //                             common_path,
-    //                             common_commitments,
+                            GetResult::NotFound(NonMembershipProof::InterNode {
+                                common_path,
+                                common_commitments,
 
-    //                             left,
-    //                             left_key,
-    //                             left_value,
+                                left,
+                                left_key,
+                                left_value,
+                                left_path,
+                                left_commitments,
                                 
-    //                             right,
-    //                             right_key,
-    //                             right_value,
+                                right,
+                                right_key,
+                                right_value,
+                                right_path,
+                                right_commitments,
+                            })
+                        },
+                        NonMembershipProof::Edge {
+                            is_left,
+                            mut path,
+                            mut commitments,
+                            leaf_proof,
+                            key,
+                            value
+                        } => {
+                            let inner_proof = InnerNodeProof {
+                                idx,
+                                node_size: self.keys.len(),
+                                key: self.keys[idx].clone(),
+                                child_hash: self.children[idx].hash().unwrap(),
+                                witness: self.get_witness(idx)
+                            };
 
-    //                             left_witness,
-    //                             right_witness
-    //                         })
-    //                     },
-    //                     NonMembershipProof::Edge {
-    //                         is_left,
-    //                         mut path,
-    //                         mut commitments,
-    //                         leaf_proof,
-    //                         key,
-    //                         value
-    //                     } => {
-    //                         let inner_proof = InnerNodeProof {
-    //                             idx,
-    //                             node_size: self.keys.len(),
-    //                             key: self.keys[idx],
-    //                             child_hash: self.children[idx].hash().unwrap(),
-    //                             witness: self.get_witness(idx)
-    //                         };
+                            path.push(inner_proof);
+                            commitments.push(self.prover.commitment().unwrap());
 
-    //                         path.push(inner_proof);
-    //                         commitments.push(self.prover.commitment());
+                            GetResult::NotFound(NonMembershipProof::Edge {
+                                is_left,
+                                path,
+                                commitments,
+                                leaf_proof,
+                                key,
+                                value
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-    //                         GetResult::NotFound(NonMembershipProof::Edge {
-    //                             is_left,
-    //                             path,
-    //                             commitments,
-    //                             leaf_proof,
-    //                             key,
-    //                             value
-    //                         })
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-
-    // pub(crate) fn get(&mut self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
-    //     let mut idx = self.get_key_traversal_idx(key);
-    //     self.get_inner(idx, key)
-    // }
+    pub(crate) fn get(&mut self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
+        let idx = self.get_key_traversal_idx(key);
+        self.get_inner(idx, key)
+    }
 }
 
 #[derive(Clone)]
@@ -675,6 +699,7 @@ pub(crate) enum LeafGetNotFound<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usi
     },
     Mid {
         idx: usize,
+        leaf_size: usize,
         commitment: KZGCommitment<Bls12>,
 
         left_witness: KZGWitness<Bls12>,
@@ -923,6 +948,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 } else {
                     // key within the node
                     LeafGetNotFound::Mid {
+                        leaf_size: self.keys.len(),
                         idx: idx - 1,
                         commitment,
                         left_witness: self.get_witness(idx - 1),
