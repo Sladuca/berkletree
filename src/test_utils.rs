@@ -102,6 +102,10 @@ pub(crate) fn assert_is_b_tree_inner<
         }
         Node::Leaf(node) => {
             // println!("(leaf) parent_key: {:?} keys: {:?}", &left_parent_key, node.keys);
+            if let (None, None) = (&left_parent_key, &right_parent_key) {
+                // if the root is a leaf, then there's no contraints on number of keys
+                return;
+            }
             assert_at_node(
                 node.keys.len() >= Q / 2,
                 &left_parent_key,
