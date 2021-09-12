@@ -212,10 +212,15 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     where
         K: AsRef<[u8]>,
     {
-        let mut key_padded = [0; MAX_KEY_LEN];
-        key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
 
-        Ok(self.root.borrow_mut().get(&key_padded))
+        if key.as_ref().len() > MAX_KEY_LEN {
+            Err(BerkleError::KeyTooLong)
+        } else {
+            let mut key_padded = [0; MAX_KEY_LEN];
+            key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
+
+            Ok(self.root.borrow_mut().get(&key_padded))
+        }
     }
 
     pub fn contains_key<K>(&mut self, key: &K) -> Result<ContainsResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
@@ -354,7 +359,8 @@ mod tests {
 
             match res {
                 GetResult::NotFound(proof) => {
-                    // TODO
+                    println!("checking non-membership proof for key {:?}", key);
+                    assert!(proof.verify(&key.to_le_bytes(), &verifier));
                 }
                 GetResult::Found(_, _) => panic!("expected key {} to not be in tree!", key),
             }

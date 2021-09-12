@@ -12,6 +12,7 @@ fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(mut prev_child
     for i in (0..path.len()).rev() {
         let commitment = &commitments[i];
 
+        // println!("{:#?}", &path[i]);
         // check child hash
         if let Some(prev_child_hash) = prev_child_hash {
             let mut hasher = Blake3Hasher::new();
@@ -159,6 +160,7 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
     }
 }
 
+#[derive(Debug)]
 pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     /// path.len() == commitments.len() - 1. The last commitment is for the leaf node
     IntraNode {
@@ -206,7 +208,7 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
 }
 
 impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN> {
-    fn verify<'params, K, const Q: usize>(
+    pub fn verify<'params, K, const Q: usize>(
         &self,
         key: &K,
         verifier: &KZGVerifier<'params, Bls12, Q>,
@@ -232,11 +234,12 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
 				right_value,
                 right_witness,
             } => {
+                println!("IntraNode");
 				if key <= &left_key.0 || key >= &right_key.0 {
 					false
 				} else {
 
-                    let (path_ok, prev_child_hash) = verify_path(None, &path, &commitments, verifier);
+                    let (path_ok, prev_child_hash) = verify_path(None, path, commitments, verifier);
                     if !path_ok {
                         return false;
                     }
@@ -255,8 +258,8 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                     }
 
 					// verify the keys to the left and right
-					let left_idx = idx - 1;
-					let right_idx = *idx;
+					let left_idx = *idx;
+					let right_idx = idx + 1;
 
 					verifier.verify_eval(
 						(
@@ -291,10 +294,10 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                 right_path,
                 right_commitments,
             } => {
+                println!("InterNode");
 				if key <= &left_key.0 || key >= &right_key.0 {
 					false
 				} else {
-
                     let mut common_path_child_hash: Option<FieldHash> = None;
 
                     if let (Some(ref common_path), Some(common_commitments)) = (common_path, common_commitments) {
@@ -339,7 +342,7 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                             hasher.update(&right.node_size.to_le_bytes());
 
                             if prev_child_hash != hasher.finalize().into() {
-                                println!("left leaf hash check failure");
+                                println!("right leaf hash check failure");
                                 return false;
                             }
 
@@ -359,7 +362,9 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                 key,
 				value,
             } => {
-                // TODO is this mathematically correct
+                // TODO is this mathematically correct?
+
+                println!("Edge(is_left: {})", is_left);
                 let mut prev_child_hash: Option<FieldHash> = None;
 
                 if *is_left {
@@ -407,7 +412,8 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                         // if the prover lied about the idx, path[i].verify() will fail
                         // therefore if this check, the hash check, and path[i].verify() succeeds,
                         // the given key is the largest key in the node
-                        if path[i].idx != path[i].node_size {
+                        if path[i].idx != path[i].node_size - 1 {
+                            println!("wrong idx: expected {}, got {}", path[i].node_size - 1, path[i].idx);
                             return false;
                         }
 

@@ -176,9 +176,11 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         leaf_commitment: commitment,
                         leaf_size,
                         idx,
+
                         left_key,
                         left_value,
                         left_witness,
+
                         right_key,
                         right_value,
                         right_witness,
@@ -521,7 +523,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                         leaf_commitment,
                         leaf_size,
-                        idx,
+                        idx: leaf_idx,
 
                         left_key,
                         left_value,
@@ -548,11 +550,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                             leaf_commitment,
                             leaf_size,
-                            idx,
+                            idx: leaf_idx,
 
                             left_key,
                             left_value,
                             left_witness,
+
                             right_key,
                             right_value,
                             right_witness
@@ -631,11 +634,11 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             // in which case we return an InterNodeProof
 
                             // otherwise, just return the result up
-                            let res = self.get_inner(idx - 1, key);
+                            let res = self.children[idx - 1].get(key);
                             if let GetResult::NotFound(NonMembershipProof::Edge {
                                     is_left: false,
                                     path: mut left_path,
-                                    commitments: left_commitments,
+                                    commitments: mut left_commitments,
                                     leaf_proof: left_leaf_proof,
                                     key: left_key,
                                     value: left_value
@@ -657,6 +660,11 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                                 left_path.push(left_inner_proof);
                                 path.push(inner_proof);
+                                
+                                left_commitments.push(self.prover.commitment().unwrap());
+                                commitments.push(self.prover.commitment().unwrap());
+
+                                println!("1");
                                 GetResult::NotFound(NonMembershipProof::InterNode {
                                     common_commitments: None,
                                     common_path: None,
@@ -674,9 +682,117 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                                     right_commitments: commitments,
                                 })
                             } else {
+                                println!("2");
                                 res
                             }
+                        } else if !is_left && idx < self.keys.len() - 1 {
+                            // if it's not the last key but it's a right edge, then it's an InterNode proof
+                            match self.children[idx + 1].get(key) {
+                                GetResult::NotFound(NonMembershipProof::Edge {
+                                    is_left: true,
+                                    path: mut right_path,
+                                    commitments: mut right_commitments,
+                                    leaf_proof: right_leaf_proof,
+                                    key: right_key,
+                                    value: right_value
+                                }) => {
+
+                                    let right_inner_proof = InnerNodeProof {
+                                        idx: idx + 1,
+                                        node_size: self.keys.len(),
+                                        key: self.keys[idx + 1].clone(),
+                                        child_hash: self.children[idx + 1].hash().unwrap(),
+                                        witness: self.get_witness(idx + 1)
+                                    };
+                                    let inner_proof = InnerNodeProof {
+                                        idx,
+                                        node_size: self.keys.len(),
+                                        key: self.keys[idx].clone(),
+                                        child_hash: self.children[idx].hash().unwrap(),
+                                        witness: self.get_witness(idx)
+                                    };
+
+                                    right_path.push(right_inner_proof);
+                                    path.push(inner_proof);
+
+                                    right_commitments.push(self.prover.commitment().unwrap());
+                                    commitments.push(self.prover.commitment().unwrap());
+
+                                    println!("3");
+                                    GetResult::NotFound(NonMembershipProof::InterNode {
+                                        common_commitments: None,
+                                        common_path: None,
+
+                                        left: leaf_proof,
+                                        left_key: leaf_key,
+                                        left_value: value,
+                                        left_path: path,
+                                        left_commitments: commitments,
+
+                                        right: right_leaf_proof,
+                                        right_key,
+                                        right_value,
+                                        right_path: right_path,
+                                        right_commitments
+                                    })
+                                },
+                                // no other case should occur if the B+ tree is properly sorted
+                                _ => panic!("should never happen!")
+                            }
+                        } else if is_left && idx > 0 {
+                            // if it's not the first key but it's a left edge, then it's an InterNode proof
+                            match self.children[idx - 1].get(key) {
+                                GetResult::NotFound(NonMembershipProof::Edge {
+                                    is_left: false,
+                                    path: mut left_path,
+                                    commitments: left_commitments,
+                                    leaf_proof: left_leaf_proof,
+                                    key: left_key,
+                                    value: left_value 
+                                }) => {
+
+                                    let left_inner_proof= InnerNodeProof {
+                                        idx: idx - 1,
+                                        node_size: self.keys.len(),
+                                        key: self.keys[idx - 1].clone(),
+                                        child_hash: self.children[idx - 1].hash().unwrap(),
+                                        witness: self.get_witness(idx - 1)
+                                    };
+                                    let inner_proof = InnerNodeProof {
+                                        idx,
+                                        node_size: self.keys.len(),
+                                        key: self.keys[idx].clone(),
+                                        child_hash: self.children[idx].hash().unwrap(),
+                                        witness: self.get_witness(idx)
+                                    };
+
+                                    left_path.push(left_inner_proof);
+                                    path.push(inner_proof);
+
+                                    println!("4");
+                                    GetResult::NotFound(NonMembershipProof::InterNode {
+                                        common_commitments: None,
+                                        common_path: None,
+
+                                        left: left_leaf_proof,
+                                        left_key,
+                                        left_value,
+                                        left_path,
+                                        left_commitments,
+
+                                        right: leaf_proof,
+                                        right_key: leaf_key,
+                                        right_value: value,
+                                        right_path: path,
+                                        right_commitments: commitments
+                                    })
+                                },
+                                // no other case should occur if the B+ tree is properly sorted
+                                _ => panic!("should never happen!")
+                            }
                         } else {
+
+                            println!("idx: {}, keys: {:?}, node_size: {}", idx, &self.keys, self.keys.len());
                             let inner_proof = InnerNodeProof {
                                 idx,
                                 node_size: self.keys.len(),
@@ -687,6 +803,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                             path.push(inner_proof);
                             commitments.push(self.prover.commitment().unwrap());
+
+                            println!("5");
 
                             GetResult::NotFound(NonMembershipProof::Edge {
                                 is_left,
@@ -996,6 +1114,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             left_value: self.values[idx - 1].clone()
                         }
                     } else {
+                        println!("left: {:?}, right: {:?}", &self.keys[idx - 1], &self.keys[idx]);
                         // key within the node
                         LeafGetNotFound::Mid {
                             leaf_size: self.keys.len(),
