@@ -311,6 +311,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_get() {
         let params = test_setup::<3>();
         let verifier = KZGVerifier::new(&params);

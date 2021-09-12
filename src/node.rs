@@ -993,7 +993,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         LeafGetNotFound::Right {
                             left,
                             left_key: self.keys[idx - 1].clone(),
-                            left_value: self.values[idx].clone()
+                            left_value: self.values[idx - 1].clone()
                         }
                     } else {
                         // key within the node
