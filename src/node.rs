@@ -514,14 +514,37 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 GetResult::Found(value, proof)
             }
             GetResult::NotFound(proof) => {
-                // backtrack through dupes until we find it or can't
-                if idx > 0 && &self.keys[idx - 1].0 == key {
-                    self.get_inner(idx - 1, key)
-                } else {
-                    match proof {
-                        NonMembershipProof::IntraNode {
-                            mut path,
-                            mut commitments,
+                match proof {
+                    NonMembershipProof::IntraNode {
+                        mut path,
+                        mut commitments,
+
+                        leaf_commitment,
+                        leaf_size,
+                        idx,
+
+                        left_key,
+                        left_value,
+                        left_witness,
+
+                        right_key,
+                        right_value,
+                        right_witness
+                    } => {
+                        let inner_proof = InnerNodeProof {
+                            idx,
+                            node_size: self.keys.len(),
+                            key: self.keys[idx].clone(),
+                            child_hash: self.children[idx].hash().unwrap(),
+                            witness: self.get_witness(idx)
+                        };
+
+                        commitments.push(self.prover.commitment().unwrap());
+                        path.push(inner_proof);
+
+                        GetResult::NotFound(NonMembershipProof::IntraNode {
+                            path,
+                            commitments,
 
                             leaf_commitment,
                             leaf_size,
@@ -530,104 +553,130 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             left_key,
                             left_value,
                             left_witness,
-
                             right_key,
                             right_value,
                             right_witness
-                        } => {
-                            let inner_proof = InnerNodeProof {
-                                idx,
-                                node_size: self.keys.len(),
-                                key: self.keys[idx].clone(),
-                                child_hash: self.children[idx].hash().unwrap(),
-                                witness: self.get_witness(idx)
-                            };
+                        })
+                    },
+                    NonMembershipProof::InterNode {
+                        mut common_path,
+                        mut common_commitments,
+                        
+                        left,
+                        left_key,
+                        left_value,
+                        left_path,
+                        left_commitments,
 
-                            commitments.push(self.prover.commitment().unwrap());
-                            path.push(inner_proof);
+                        right,
+                        right_key,
+                        right_value,
+                        right_path,
+                        right_commitments,
+                    } => {
+                        let inner_proof = InnerNodeProof {
+                            idx, 
+                            node_size: self.keys.len(),
+                            key: self.keys[idx].clone(),
+                            child_hash: self.children[idx].hash().unwrap(),
+                            witness: self.get_witness(idx)
+                        };
 
-                            GetResult::NotFound(NonMembershipProof::IntraNode {
-                                path,
-                                commitments,
+                        common_path = match common_path {
+                            Some(mut common_path) => {
+                                common_path.push(inner_proof);
+                                Some(common_path)
+                            },
+                            None => Some(vec![inner_proof])
+                        };
 
-                                leaf_commitment,
-                                leaf_size,
-                                idx,
+                        common_commitments = match common_commitments {
+                            Some(mut common_commitments) => {
+                                common_commitments.push(self.prover.commitment().unwrap());
+                                Some(common_commitments)
+                            },
+                            None => Some(vec![self.prover.commitment().unwrap()])
+                        };
 
-                                left_key,
-                                left_value,
-                                left_witness,
-                                right_key,
-                                right_value,
-                                right_witness
-                            })
-                        },
-                        NonMembershipProof::InterNode {
-                            mut common_path,
-                            mut common_commitments,
-                            
+                        
+                        GetResult::NotFound(NonMembershipProof::InterNode {
+                            common_path,
+                            common_commitments,
+
                             left,
                             left_key,
                             left_value,
                             left_path,
                             left_commitments,
-
+                            
                             right,
                             right_key,
                             right_value,
                             right_path,
                             right_commitments,
-                        } => {
-                            let inner_proof = InnerNodeProof {
-                                idx, 
-                                node_size: self.keys.len(),
-                                key: self.keys[idx].clone(),
-                                child_hash: self.children[idx].hash().unwrap(),
-                                witness: self.get_witness(idx)
-                            };
+                        })
+                    },
+                    NonMembershipProof::Edge {
+                        is_left,
+                        mut path,
+                        mut commitments,
+                        leaf_proof,
+                        key: leaf_key,
+                        value
+                    } => {
+                        if is_left && idx > 0 && &self.keys[idx - 1].0 == key {
+                        
+                            // if result of backtrack is NotFound::Edge on the right,
+                            // then the key is between child[idx - 1] and child[idx],
+                            // in which case we return an InterNodeProof
 
-                            common_path = match common_path {
-                                Some(mut common_path) => {
-                                    common_path.push(inner_proof);
-                                    Some(common_path)
-                                },
-                                None => Some(vec![inner_proof])
-                            };
+                            // otherwise, just return the result up
+                            let res = self.get_inner(idx - 1, key);
+                            if let GetResult::NotFound(NonMembershipProof::Edge {
+                                    is_left: false,
+                                    path: mut left_path,
+                                    commitments: left_commitments,
+                                    leaf_proof: left_leaf_proof,
+                                    key: left_key,
+                                    value: left_value
+                            }) = res {
+                                let left_inner_proof = InnerNodeProof {
+                                    idx: idx - 1,
+                                    node_size: self.keys.len(),
+                                    key: self.keys[idx - 1].clone(),
+                                    child_hash: self.children[idx - 1].hash().unwrap(),
+                                    witness: self.get_witness(idx - 1)
+                                };
+                                let inner_proof = InnerNodeProof {
+                                    idx,
+                                    node_size: self.keys.len(),
+                                    key: self.keys[idx].clone(),
+                                    child_hash: self.children[idx].hash().unwrap(),
+                                    witness: self.get_witness(idx)
+                                };
 
-                            common_commitments = match common_commitments {
-                                Some(mut common_commitments) => {
-                                    common_commitments.push(self.prover.commitment().unwrap());
-                                    Some(common_commitments)
-                                },
-                                None => Some(vec![self.prover.commitment().unwrap()])
-                            };
+                                left_path.push(left_inner_proof);
+                                path.push(inner_proof);
+                                GetResult::NotFound(NonMembershipProof::InterNode {
+                                    common_commitments: None,
+                                    common_path: None,
 
-                            
-                            GetResult::NotFound(NonMembershipProof::InterNode {
-                                common_path,
-                                common_commitments,
+                                    left: left_leaf_proof,
+                                    left_key,
+                                    left_value,
+                                    left_path,
+                                    left_commitments,
 
-                                left,
-                                left_key,
-                                left_value,
-                                left_path,
-                                left_commitments,
-                                
-                                right,
-                                right_key,
-                                right_value,
-                                right_path,
-                                right_commitments,
-                            })
-                        },
-                        NonMembershipProof::Edge {
-                            is_left,
-                            mut path,
-                            mut commitments,
-                            leaf_proof,
-                            key,
-                            value
-                        } => {
+                                    right: leaf_proof,
+                                    right_key: leaf_key,
+                                    right_value: value,
+                                    right_path: path,
+                                    right_commitments: commitments,
+                                })
+                            } else {
+                                res
+                            }
+                        } else {
                             let inner_proof = InnerNodeProof {
                                 idx,
                                 node_size: self.keys.len(),
@@ -644,7 +693,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                                 path,
                                 commitments,
                                 leaf_proof,
-                                key,
+                                key: leaf_key,
                                 value
                             })
                         }
@@ -917,48 +966,50 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 ))
             }
             Err(idx) => {
-                Either::Right(if idx == 0 {
-                    // key < smallest key
-                    let right = KVProof {
-                        idx,
-                        node_size: self.keys.len(),
-                        retrieved_key_counter: self.keys[idx].1,
-                        commitment,
-                        witness: self.get_witness(idx),
-                    };
-                    LeafGetNotFound::Left {
-                        right,
-                        right_key: self.keys[idx].clone(),
-                        right_value: self.values[idx].clone()
+                Either::Right(
+                    if idx == 0 {
+                        // key < smallest key
+                        let right = KVProof {
+                            idx,
+                            node_size: self.keys.len(),
+                            retrieved_key_counter: self.keys[idx].1,
+                            commitment,
+                            witness: self.get_witness(idx),
+                        };
+                        LeafGetNotFound::Left {
+                            right,
+                            right_key: self.keys[idx].clone(),
+                            right_value: self.values[idx].clone()
+                        }
+                    } else if idx == self.keys.len() {
+                        // key > biggest key
+                        let left = KVProof {
+                            idx: idx - 1,
+                            node_size: self.keys.len(),
+                            retrieved_key_counter: self.keys[idx - 1].1,
+                            commitment,
+                            witness: self.get_witness(idx - 1),
+                        };
+                        LeafGetNotFound::Right {
+                            left,
+                            left_key: self.keys[idx - 1].clone(),
+                            left_value: self.values[idx].clone()
+                        }
+                    } else {
+                        // key within the node
+                        LeafGetNotFound::Mid {
+                            leaf_size: self.keys.len(),
+                            idx: idx - 1,
+                            commitment,
+                            left_witness: self.get_witness(idx - 1),
+                            left_key: self.keys[idx - 1].clone(),
+                            left_value: self.values[idx - 1].clone(),
+                            right_witness: self.get_witness(idx),
+                            right_key: self.keys[idx].clone(),
+                            right_value: self.values[idx].clone()
+                        }
                     }
-                } else if idx == self.keys.len() {
-                    // key > biggest key
-                    let left = KVProof {
-                        idx: idx - 1,
-                        node_size: self.keys.len(),
-                        retrieved_key_counter: self.keys[idx - 1].1,
-                        commitment,
-                        witness: self.get_witness(idx - 1),
-                    };
-                    LeafGetNotFound::Right {
-                        left,
-                        left_key: self.keys[idx - 1].clone(),
-                        left_value: self.values[idx].clone()
-                    }
-                } else {
-                    // key within the node
-                    LeafGetNotFound::Mid {
-                        leaf_size: self.keys.len(),
-                        idx: idx - 1,
-                        commitment,
-                        left_witness: self.get_witness(idx - 1),
-                        left_key: self.keys[idx - 1].clone(),
-                        left_value: self.values[idx - 1].clone(),
-                        right_witness: self.get_witness(idx),
-                        right_key: self.keys[idx].clone(),
-                        right_value: self.values[idx].clone()
-                    }
-                })
+                )
             }
         }
     }

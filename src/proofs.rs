@@ -5,7 +5,7 @@ use kzg::{KZGCommitment, KZGVerifier, KZGWitness};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::node::Node;
-use crate::{FieldHash, KeyWithCounter};
+use crate::{FieldHash, KeyWithCounter, null_key};
 
 fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(mut prev_child_hash: Option<FieldHash>, path: &Vec<InnerNodeProof<MAX_KEY_LEN>>, commitments: &Vec<KZGCommitment<Bls12>>, verifier: &KZGVerifier<'params, Bls12, Q>) -> (bool, Option<FieldHash>) {
     // verify the audit path
@@ -28,7 +28,7 @@ fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(mut prev_child
             }
         };
 
-        // verify the polynomial evaln
+        // verify the polynomial eval
         if !path[i].verify(commitment, verifier) {
             println!(
                 "polynomial eval check failure at level {:?}",
@@ -179,6 +179,7 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
     },
     InterNode {
         common_path: Option<Vec<InnerNodeProof<MAX_KEY_LEN>>>,
+        // does not contain the commitment for the inner node at which they split
         common_commitments: Option<Vec<KZGCommitment<Bls12>>>,
 
         left: KVProof,
@@ -359,7 +360,89 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
 				value,
             } => {
                 // TODO is this mathematically correct
-                unimplemented!();
+                let mut prev_child_hash: Option<FieldHash> = None;
+
+                if *is_left {
+                    for i in (0..path.len()).rev() {
+                        // check to make sure idx of this node is 0 and node.keys[idx] == null key
+                        if path[i].idx != 0 || path[i].key != null_key() {
+                            return false;
+                        }
+
+                        let commitment = &commitments[i];
+
+                        // check child hash
+                        if let Some(prev_child_hash) = prev_child_hash {
+                            let mut hasher = Blake3Hasher::new();
+                            hasher.update(&commitment.inner().to_compressed());
+                            hasher.update(b"internal");
+                            hasher.update(&path[i].node_size.to_le_bytes());
+
+                            if prev_child_hash != hasher.finalize().into() {
+                                println!(
+                                    "child hash check failure at level {:?}",
+                                    path.len() - 1 - i
+                                );
+                                return false;
+                            }
+                        }
+
+                        // verify the polynomial eval
+                        if !path[i].verify(commitment, verifier) {
+                            println!(
+                                "polynomial eval check failure at level {:?}",
+                                path.len() - 1 - i
+                            );
+                            return false;
+                        }
+
+                        prev_child_hash = Some(path[i].child_hash);
+                    }
+                    
+                    true
+                } else {
+                    for i in (0..path.len()).rev() {
+                        // check to make sure idx of this node == the node size
+                        // if the prover lied about the node_size, the hash check will fail
+                        // if the prover lied about the idx, path[i].verify() will fail
+                        // therefore if this check, the hash check, and path[i].verify() succeeds,
+                        // the given key is the largest key in the node
+                        if path[i].idx != path[i].node_size {
+                            return false;
+                        }
+
+                        let commitment = &commitments[i];
+
+                        // check child hash
+                        if let Some(prev_child_hash) = prev_child_hash {
+                            let mut hasher = Blake3Hasher::new();
+                            hasher.update(&commitment.inner().to_compressed());
+                            hasher.update(b"internal");
+                            hasher.update(&path[i].node_size.to_le_bytes());
+
+                            if prev_child_hash != hasher.finalize().into() {
+                                println!(
+                                    "child hash check failure at level {:?}",
+                                    path.len() - 1 - i
+                                );
+                                return false;
+                            }
+                        }
+
+                        // verify the polynomial eval
+                        if !path[i].verify(commitment, verifier) {
+                            println!(
+                                "polynomial eval check failure at level {:?}",
+                                path.len() - 1 - i
+                            );
+                            return false;
+                        }
+
+                        prev_child_hash = Some(path[i].child_hash);
+                    }
+
+                    true
+                }
             }
         }
     }
