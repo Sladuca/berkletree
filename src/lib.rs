@@ -295,8 +295,8 @@ mod tests {
 
     #[test]
     fn test_insert_with_dupes() {
-        let params = test_setup::<3>();
-        let mut tree = BerkleTree::<3, 4, 4>::new(&params);
+        let params = test_setup::<4>();
+        let mut tree = BerkleTree::<4, 4, 4>::new(&params);
 
         // with dupes
         let keys: Vec<u32> = vec![6, 2, 4, 1, 1, 3, 5, 7, 4];
@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_no_dupes() {
+    fn test_get() {
         let params = test_setup::<3>();
         let verifier = KZGVerifier::new(&params);
         let mut tree = BerkleTree::<3, 4, 4>::new(&params);
@@ -338,8 +338,8 @@ mod tests {
                 .unwrap();
         }
 
-        // get stuff that exists in tree
-        let search_key_idxs: Vec<usize> = vec![0, 5, 7, 8, 4];
+        // get stuff that exists in tree, including dupes
+        let search_key_idxs: Vec<usize> = vec![0, 1, 5, 7, 8, 4];
 
         for &i in search_key_idxs.iter() {
             let res = tree.get(&keys[i].to_le_bytes()).unwrap();

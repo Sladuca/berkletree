@@ -965,7 +965,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         self.values.insert(idx, value.to_owned());
         self.hashes.insert(idx, hash.into());
 
-        if self.keys.len() == Q {
+        if self.keys.len() > Q {
             let mid = self.keys.len() / 2;
 
             let mut right = LeafNode::new(self.prover.parameters());
