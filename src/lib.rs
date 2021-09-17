@@ -65,7 +65,7 @@ impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
 
 impl<const MAX_KEY_LEN: usize> PartialEq for KeyWithCounter<MAX_KEY_LEN> {
     fn eq(&self, other: &KeyWithCounter<MAX_KEY_LEN>) -> bool {
-        self.0 == other.0
+        self.0 == other.0 && self.1 == other.1
     }
 }
 
@@ -251,15 +251,19 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             let mut key_padded = [0; MAX_KEY_LEN];
             key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
 
+            println!("delete({:?})", key_padded);
+
             // check to make sure key exists
-            match self.root.borrow_mut().get(&key_padded) {
+            let path: Vec<usize> = match self.root.borrow_mut().get(&key_padded) {
                 GetResult::NotFound(proof) => return Ok(DeleteResult::NotFound(proof)),
-                _ => {}
-            }
+                GetResult::Found(_, proof) => {
+                    proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect()
+                }
+            };
 
             let mut root = self.root.borrow_mut();
 
-            let (res, new_root) = match root.delete(&key_padded) {
+            let (res, new_root) = match root.delete(&key_padded, path.as_slice()) {
                 ((value, hash), _idx, false) => (DeleteResult::Deleted(value, hash), None),
                 ((value, hash), _idx, true) => {
                     // need to decrease height of the tree
