@@ -18,7 +18,11 @@ mod test_utils;
 
 use error::BerkleError;
 use node::{InternalNode, LeafNode, Node};
-use proofs::{ContainsResult, GetResult, InnerNodeProof, MembershipProof, RangeResult};
+use proofs::{
+    ContainsResult, GetResult, InnerNodeProof, MembershipProof, NonMembershipProof, RangeResult,
+};
+
+use crate::proofs::DeleteResult;
 
 /// this wrapper struct denotes a hash that lies in Bls12_381's Scalar Field
 /// it is computed by chopping off the two most-significant bits of the hash
@@ -51,13 +55,10 @@ impl Into<Scalar> for FieldHash {
 
 // assumes there will be no more than 255 duplicate keys in a single node
 #[derive(Debug, Clone, Eq, PartialOrd, Ord)]
-pub struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], u8);
+pub struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], usize);
 
 impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
-    pub(crate) fn new(key: [u8; MAX_KEY_LEN], mut count: u8) -> Self {
-        if key == [0; MAX_KEY_LEN] {
-            count += 1;
-        }
+    pub(crate) fn new(key: [u8; MAX_KEY_LEN], mut count: usize) -> Self {
         KeyWithCounter(key, count)
     }
 }
@@ -103,6 +104,7 @@ pub(crate) fn null_key<const MAX_KEY_LEN: usize>() -> KeyWithCounter<MAX_KEY_LEN
 pub struct BerkleTree<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     params: &'params KZGParams<Bls12, Q>,
     root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
+    cnt: usize,
 }
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug
@@ -123,6 +125,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         BerkleTree {
             params,
             root: Rc::new(RefCell::new(LeafNode::new(&params).into())),
+            cnt: 0,
         }
     }
 
@@ -149,17 +152,21 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             let mut value_padded = [0; MAX_VAL_LEN];
             value_padded[0..value.len()].copy_from_slice(value.as_ref());
 
+            let key = KeyWithCounter(key_padded, self.cnt);
+
             let (mut proof, new_node) =
                 self.root
                     .borrow_mut()
-                    .insert(&key_padded, &value_padded, hash);
+                    .insert(&key, &value_padded, hash);
+
+            self.cnt += 1;
 
             match new_node {
                 Some((split_key, child)) => {
-                    let proof_in_new_node = key_padded >= split_key;
+                    let proof_in_new_node = key.0 >= split_key.0;
 
                     let new_root = InternalNode {
-                        keys: vec![null_key(), KeyWithCounter::new(split_key, 0)],
+                        keys: vec![null_key(), split_key],
                         children: vec![child],
                         witnesses: vec![None; Q],
                         batch_witness: None,
@@ -197,22 +204,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    pub fn bulk_insert<K, V>(
-        &mut self,
-        entries: Vec<(K, V, Blake3Hash)>,
-    ) -> Result<Vec<MembershipProof<MAX_KEY_LEN>>, BerkleError>
-    where
-        K: AsRef<[u8]>,
-        V: AsRef<[u8]>,
-    {
-        unimplemented!()
-    }
-
     pub fn get<K>(&mut self, key: &K) -> Result<GetResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
-
         if key.as_ref().len() > MAX_KEY_LEN {
             Err(BerkleError::KeyTooLong)
         } else {
@@ -223,18 +218,78 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    pub fn contains_key<K>(&mut self, key: &K) -> Result<ContainsResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
+    pub fn contains_key<K>(
+        &mut self,
+        key: &K,
+    ) -> Result<ContainsResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
-        unimplemented!()
+        if key.as_ref().len() > MAX_KEY_LEN {
+            Err(BerkleError::KeyTooLong)
+        } else {
+            let mut key_padded = [0; MAX_KEY_LEN];
+            key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
+
+            match self.root.borrow_mut().get(&key_padded) {
+                GetResult::Found(_value, proof) => Ok(ContainsResult::Found(proof)),
+                GetResult::NotFound(proof) => Ok(ContainsResult::NotFound(proof)),
+            }
+        }
     }
 
-    pub fn contains_key_no_proof<K>(&self, key: &K) -> bool
+    pub fn delete<K>(
+        &mut self,
+        key: &K,
+    ) -> Result<DeleteResult<MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
-        unimplemented!()
+        if key.as_ref().len() > MAX_KEY_LEN {
+            Err(BerkleError::KeyTooLong)
+        } else {
+            let mut key_padded = [0; MAX_KEY_LEN];
+            key_padded[0..key.as_ref().len()].copy_from_slice(key.as_ref());
+
+            // check to make sure key exists
+            match self.root.borrow_mut().get(&key_padded) {
+                GetResult::NotFound(proof) => return Ok(DeleteResult::NotFound(proof)),
+                _ => {}
+            }
+
+            let mut root = self.root.borrow_mut();
+
+            let (res, new_root) = match root.delete(&key_padded) {
+                ((value, hash), _idx, false) => (DeleteResult::Deleted(value, hash), None),
+                ((value, hash), _idx, true) => {
+                    // need to decrease height of the tree
+                    match &mut *root {
+                        Node::Internal(ref mut node) => {
+                            // merge all the children
+                            let mut key = node.keys.pop().unwrap();
+                            let mut right = node.children.pop().unwrap();
+                            while node.keys.len() > 0 {
+                                let mut left = node.children.pop().unwrap();
+                                left.merge_from_right(right, key);
+                                
+                                right = left;
+                                key = node.keys.pop().unwrap();
+                            }
+
+                            (DeleteResult::Deleted(value, hash), Some(right))
+                        },
+                        // if root is leaf, we can ignore the min key constraint
+                        Node::Leaf(_) => (DeleteResult::Deleted(value, hash), None)
+                    }
+                }
+            };
+
+            if let Some(new_root) = new_root {
+                *root = new_root;
+            }
+
+            Ok(res)
+        }
     }
 
     pub fn range<K>(
@@ -251,6 +306,8 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use fastrand::Rng;
     use kzg::KZGVerifier;
@@ -336,6 +393,8 @@ mod tests {
             let hash = blake3::hash(&value.to_le_bytes());
             tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash)
                 .unwrap();
+            
+            assert_is_b_tree(&tree);
         }
 
         // get stuff that exists in tree, including dupes
@@ -364,6 +423,52 @@ mod tests {
                 }
                 GetResult::Found(_, _) => panic!("expected key {} to not be in tree!", key),
             }
+        }
+    }
+
+    #[test]
+    fn test_delete() {
+        let params = test_setup::<4>();
+        let verifier = KZGVerifier::new(&params);
+        let mut tree = BerkleTree::<4, 4, 4>::new(&params);
+
+        // build tree
+        let keys: Vec<u32> = vec![5, 12, 9, 12, 81, 32, 7, 2, 54, 69, 57, 23, 78, 13, 9, 12];
+        let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+        let mut pairs = HashMap::<u32, Vec<u32>>::new();
+
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let hash = blake3::hash(&value.to_le_bytes());
+            tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
+
+            if let Some(v) = pairs.get_mut(key) {
+                v.push(*value);
+            } else {
+                pairs.insert(*key, vec![*value]);
+            }
+            
+            assert_is_b_tree(&tree);
+        }
+
+        // delete stuff
+        for (key, value) in keys.iter().zip(values.iter()) {
+            match tree.delete(&key.to_le_bytes()) {
+                Ok(DeleteResult::Deleted(v, hash)) => {
+                    assert_is_b_tree(&tree);
+
+                    // check to make sure returned value is one of the dupes put in
+                    let vs = pairs.get(key).expect("expect pairs to contain key");
+                    assert!(vs.contains(&u32::from_le_bytes(v)));
+
+
+                    // check hash
+                    assert_eq!(blake3::hash(&v), hash);
+                }
+                _ => panic!("delete({}) either failed or was NotFound!", key)
+            }
+
         }
     }
 }

@@ -5,9 +5,14 @@ use kzg::{KZGCommitment, KZGVerifier, KZGWitness};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::node::Node;
-use crate::{FieldHash, KeyWithCounter, null_key};
+use crate::{null_key, FieldHash, KeyWithCounter};
 
-fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(mut prev_child_hash: Option<FieldHash>, path: &Vec<InnerNodeProof<MAX_KEY_LEN>>, commitments: &Vec<KZGCommitment<Bls12>>, verifier: &KZGVerifier<'params, Bls12, Q>) -> (bool, Option<FieldHash>) {
+fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(
+    mut prev_child_hash: Option<FieldHash>,
+    path: &Vec<InnerNodeProof<MAX_KEY_LEN>>,
+    commitments: &Vec<KZGCommitment<Bls12>>,
+    verifier: &KZGVerifier<'params, Bls12, Q>,
+) -> (bool, Option<FieldHash>) {
     // verify the audit path
     for i in (0..path.len()).rev() {
         let commitment = &commitments[i];
@@ -21,10 +26,7 @@ fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(mut prev_child
             hasher.update(&path[i].node_size.to_le_bytes());
 
             if prev_child_hash != hasher.finalize().into() {
-                println!(
-                    "child hash check failure at level {:?}",
-                    path.len() - 1 - i
-                );
+                println!("child hash check failure at level {:?}", path.len() - 1 - i);
                 return (false, Some(prev_child_hash));
             }
         };
@@ -51,7 +53,7 @@ fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(mut prev_child
 pub struct KVProof {
     pub(crate) idx: usize,
     pub(crate) node_size: usize,
-    pub(crate) retrieved_key_counter: u8,
+    pub(crate) retrieved_key_counter: usize,
     pub(crate) commitment: KZGCommitment<Bls12>,
     pub(crate) witness: KZGWitness<Bls12>,
 }
@@ -138,7 +140,6 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
         value_hash: Blake3Hash,
         verifier: &KZGVerifier<'params, Bls12, Q>,
     ) -> bool {
-
         let (path_ok, prev_child_hash) = verify_path(None, &self.path, &self.commitments, verifier);
 
         // check the last hash
@@ -165,18 +166,18 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
     /// path.len() == commitments.len() - 1. The last commitment is for the leaf node
     IntraNode {
         path: Vec<InnerNodeProof<MAX_KEY_LEN>>,
-		commitments: Vec<KZGCommitment<Bls12>>,
+        commitments: Vec<KZGCommitment<Bls12>>,
         leaf_commitment: KZGCommitment<Bls12>,
-        leaf_size: usize, 
+        leaf_size: usize,
         // idx of left key
         idx: usize,
 
         left_key: KeyWithCounter<MAX_KEY_LEN>,
-		left_value: [u8; MAX_VAL_LEN],
+        left_value: [u8; MAX_VAL_LEN],
         left_witness: KZGWitness<Bls12>,
 
         right_key: KeyWithCounter<MAX_KEY_LEN>,
-		right_value: [u8; MAX_VAL_LEN],
+        right_value: [u8; MAX_VAL_LEN],
         right_witness: KZGWitness<Bls12>,
     },
     InterNode {
@@ -186,16 +187,15 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
 
         left: KVProof,
         left_key: KeyWithCounter<MAX_KEY_LEN>,
-		left_value: [u8; MAX_VAL_LEN],
+        left_value: [u8; MAX_VAL_LEN],
         left_path: Vec<InnerNodeProof<MAX_KEY_LEN>>,
         left_commitments: Vec<KZGCommitment<Bls12>>,
 
-
         right: KVProof,
         right_key: KeyWithCounter<MAX_KEY_LEN>,
-		right_value: [u8; MAX_VAL_LEN],
+        right_value: [u8; MAX_VAL_LEN],
         right_path: Vec<InnerNodeProof<MAX_KEY_LEN>>,
-        right_commitments: Vec<KZGCommitment<Bls12>>
+        right_commitments: Vec<KZGCommitment<Bls12>>,
     },
     Edge {
         is_left: bool,
@@ -203,11 +203,13 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
         commitments: Vec<KZGCommitment<Bls12>>,
         leaf_proof: KVProof,
         key: KeyWithCounter<MAX_KEY_LEN>,
-		value: [u8; MAX_VAL_LEN]
+        value: [u8; MAX_VAL_LEN],
     },
 }
 
-impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN> {
+impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
+    NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN>
+{
     pub fn verify<'params, K, const Q: usize>(
         &self,
         key: &K,
@@ -227,18 +229,17 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                 idx,
 
                 left_key,
-				left_value,
+                left_value,
                 left_witness,
 
                 right_key,
-				right_value,
+                right_value,
                 right_witness,
             } => {
                 println!("IntraNode");
-				if key <= &left_key.0 || key >= &right_key.0 {
-					false
-				} else {
-
+                if key <= &left_key.0 || key >= &right_key.0 {
+                    false
+                } else {
                     let (path_ok, prev_child_hash) = verify_path(None, path, commitments, verifier);
                     if !path_ok {
                         return false;
@@ -257,26 +258,26 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                         }
                     }
 
-					// verify the keys to the left and right
-					let left_idx = *idx;
-					let right_idx = idx + 1;
+                    // verify the keys to the left and right
+                    let left_idx = *idx;
+                    let right_idx = idx + 1;
 
-					verifier.verify_eval(
-						(
-							left_key.field_hash_with_idx(left_idx).into(),
-							FieldHash::from(blake3::hash(left_value)).into()
-						),
-						leaf_commitment,
-						left_witness
-					) && verifier.verify_eval(
-						(
-							right_key.field_hash_with_idx(right_idx).into(),
-							FieldHash::from(blake3::hash(right_value)).into()
-						),
-						leaf_commitment,
-						right_witness
-					)
-				}
+                    verifier.verify_eval(
+                        (
+                            left_key.field_hash_with_idx(left_idx).into(),
+                            FieldHash::from(blake3::hash(left_value)).into(),
+                        ),
+                        leaf_commitment,
+                        left_witness,
+                    ) && verifier.verify_eval(
+                        (
+                            right_key.field_hash_with_idx(right_idx).into(),
+                            FieldHash::from(blake3::hash(right_value)).into(),
+                        ),
+                        leaf_commitment,
+                        right_witness,
+                    )
+                }
             }
             NonMembershipProof::InterNode {
                 common_path,
@@ -284,24 +285,27 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
 
                 left,
                 left_key,
-				left_value,
+                left_value,
                 left_path,
                 left_commitments,
 
                 right,
                 right_key,
-				right_value,
+                right_value,
                 right_path,
                 right_commitments,
             } => {
                 println!("InterNode");
-				if key <= &left_key.0 || key >= &right_key.0 {
-					false
-				} else {
+                if key <= &left_key.0 || key >= &right_key.0 {
+                    false
+                } else {
                     let mut common_path_child_hash: Option<FieldHash> = None;
 
-                    if let (Some(ref common_path), Some(common_commitments)) = (common_path, common_commitments) {
-                        let (path_ok, prev_child_hash) = verify_path(None, common_path, common_commitments, verifier);
+                    if let (Some(ref common_path), Some(common_commitments)) =
+                        (common_path, common_commitments)
+                    {
+                        let (path_ok, prev_child_hash) =
+                            verify_path(None, common_path, common_commitments, verifier);
                         if !path_ok {
                             return false;
                         }
@@ -312,7 +316,12 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                     // verify the left and right paths & leaf hashes
                     if let Some(common_path_child_hash) = common_path_child_hash {
                         // left
-                        let (path_ok, prev_child_hash) = verify_path(Some(common_path_child_hash.clone()), &left_path, &left_commitments, verifier);
+                        let (path_ok, prev_child_hash) = verify_path(
+                            Some(common_path_child_hash.clone()),
+                            &left_path,
+                            &left_commitments,
+                            verifier,
+                        );
                         if !path_ok {
                             return false;
                         }
@@ -330,7 +339,12 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                         }
 
                         // right
-                        let (path_ok, prev_child_hash) = verify_path(Some(common_path_child_hash), &right_path, &right_commitments, verifier);
+                        let (path_ok, prev_child_hash) = verify_path(
+                            Some(common_path_child_hash),
+                            &right_path,
+                            &right_commitments,
+                            verifier,
+                        );
                         if !path_ok {
                             return false;
                         }
@@ -345,13 +359,19 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                                 println!("right leaf hash check failure");
                                 return false;
                             }
-
                         }
                     }
 
                     // verify leaf proofs
-                    left.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(&left_key.0, blake3::hash(left_value), verifier)
-                        && right.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(&right_key.0, blake3::hash(right_value), verifier)
+                    left.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(
+                        &left_key.0,
+                        blake3::hash(left_value),
+                        verifier,
+                    ) && right.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(
+                        &right_key.0,
+                        blake3::hash(right_value),
+                        verifier,
+                    )
                 }
             }
             NonMembershipProof::Edge {
@@ -360,7 +380,7 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                 commitments,
                 leaf_proof,
                 key,
-				value,
+                value,
             } => {
                 // TODO is this mathematically correct?
 
@@ -403,7 +423,7 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
 
                         prev_child_hash = Some(path[i].child_hash);
                     }
-                    
+
                     true
                 } else {
                     for i in (0..path.len()).rev() {
@@ -413,7 +433,11 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> NonMembershipProof<MAX_
                         // therefore if this check, the hash check, and path[i].verify() succeeds,
                         // the given key is the largest key in the node
                         if path[i].idx != path[i].node_size - 1 {
-                            println!("wrong idx: expected {}, got {}", path[i].node_size - 1, path[i].idx);
+                            println!(
+                                "wrong idx: expected {}, got {}",
+                                path[i].node_size - 1,
+                                path[i].idx
+                            );
                             return false;
                         }
 
@@ -473,6 +497,11 @@ pub enum GetResult<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
 
 pub enum ContainsResult<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     Found(MembershipProof<MAX_KEY_LEN>),
+    NotFound(NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN>),
+}
+
+pub enum DeleteResult<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
+    Deleted([u8; MAX_VAL_LEN], Blake3Hash),
     NotFound(NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN>),
 }
 
