@@ -485,9 +485,9 @@ pub enum RangePath<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
 
 // TODO
 pub struct RangeProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
-    left_path: RangePath<MAX_KEY_LEN, MAX_VAL_LEN>,
-    right_path: RangePath<MAX_KEY_LEN, MAX_VAL_LEN>,
-    bitvecs: Vec<BitVec>,
+    pub(crate) left_path: RangePath<MAX_KEY_LEN, MAX_VAL_LEN>,
+    pub(crate) right_path: RangePath<MAX_KEY_LEN, MAX_VAL_LEN>,
+    pub(crate) bitvecs: Vec<BitVec>,
 }
 
 pub enum GetResult<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
@@ -507,13 +507,9 @@ pub enum DeleteResult<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
 
 pub struct RangeResult<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
 {
-    proof: RangeProof<MAX_KEY_LEN, MAX_VAL_LEN>,
-    iter: RangeIter<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
-}
-
-pub struct RangeIter<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
-    left_path: Vec<KeyWithCounter<MAX_KEY_LEN>>,
-    right_path: Vec<KeyWithCounter<MAX_KEY_LEN>>,
-    root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
-    current_key: [u8; MAX_KEY_LEN],
+    pub(crate) proof: RangeProof<MAX_KEY_LEN, MAX_VAL_LEN>,
+    pub(crate) root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
+    // when iterating, this gets set
+    pub(crate) current_key: Option<[u8; MAX_KEY_LEN]>,
+    pub(crate) size: usize
 }

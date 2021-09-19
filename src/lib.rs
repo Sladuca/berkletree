@@ -8,6 +8,7 @@ use std::{
     fmt::{Debug, Formatter},
     rc::Rc,
 };
+use bitvec::vec::BitVec;
 
 mod error;
 mod node;
@@ -18,9 +19,7 @@ mod test_utils;
 
 use error::BerkleError;
 use node::{InternalNode, LeafNode, Node};
-use proofs::{
-    ContainsResult, GetResult, InnerNodeProof, MembershipProof, NonMembershipProof, RangeResult,
-};
+use proofs::{ContainsResult, GetResult, InnerNodeProof, MembershipProof, NonMembershipProof, RangePath, RangeProof, RangeResult};
 
 use crate::proofs::DeleteResult;
 
@@ -58,7 +57,7 @@ impl Into<Scalar> for FieldHash {
 pub struct KeyWithCounter<const MAX_KEY_LEN: usize>([u8; MAX_KEY_LEN], usize);
 
 impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {
-    pub(crate) fn new(key: [u8; MAX_KEY_LEN], mut count: usize) -> Self {
+    pub(crate) fn new(key: [u8; MAX_KEY_LEN], count: usize) -> Self {
         KeyWithCounter(key, count)
     }
 }
@@ -295,16 +294,90 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             Ok(res)
         }
     }
+}
 
-    pub fn range<K>(
-        &mut self,
+impl<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
+    BerkleTree<'static, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+{
+  pub fn range<K>(
+        &'static mut self,
         left: &K,
         right: &K,
     ) -> Result<RangeResult<Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
-        unimplemented!()
+
+        let left = self.get(left)?;
+        let right = self.get(right)?;
+
+        let (left_path, left_range_path) = match left {
+            GetResult::Found(_, proof) => {
+                (proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect(), RangePath::KeyExists(proof))
+            },
+            GetResult::NotFound(proof) => {
+                match proof {
+                    NonMembershipProof::IntraNode { ref path, idx, .. } => {
+                        let mut path: Vec<usize> = path.iter().rev().map(|pf| pf.idx).collect();
+                        // idx of IntraNode proof is the left element - we want the right one in this case
+                        path.push(idx + 1);
+                        (path, RangePath::KeyDNE(proof))
+                    },
+                    NonMembershipProof::InterNode { ref common_path, ref right_path, ref right, ..} => {
+                        let mut path: Vec<usize> = common_path.as_ref().map_or(Vec::with_capacity(right_path.len()), |p| p.iter().rev().map(|pf| pf.idx).collect());
+                        path.extend(right_path.iter().map(|pf| pf.idx));
+                        path.push(right.idx);
+                        (path, RangePath::KeyDNE(proof))
+                    },
+                    NonMembershipProof::Edge { ref path, ref leaf_proof, ..} => {
+                        let mut path: Vec<usize> = path.iter().rev().map(|pf| pf.idx).collect();
+                        path.push(leaf_proof.idx);
+                        (path, RangePath::KeyDNE(proof))
+                    }
+                }
+            }
+        };
+
+        let (right_path, right_range_path)= match right {
+            GetResult::Found(_, proof) => {
+                (proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect(), RangePath::KeyExists(proof))
+            },
+            GetResult::NotFound(proof) => {
+                match proof {
+                    NonMembershipProof::IntraNode { ref path, idx, .. } => {
+                        let mut path: Vec<usize> = path.iter().rev().map(|pf| pf.idx).collect();
+                        path.push(idx);
+                        (path, RangePath::KeyDNE(proof))
+                    },
+                    NonMembershipProof::InterNode { ref common_path, ref left_path, ref left, ..} => {
+                        let mut path: Vec<usize> = common_path.as_ref().map_or(Vec::with_capacity(left_path.len()), |p| p.iter().rev().map(|pf| pf.idx).collect());
+                        path.extend(left_path.iter().map(|pf| pf.idx));
+                        path.push(left.idx);
+                        (path, RangePath::KeyDNE(proof))
+                    },
+                    NonMembershipProof::Edge { ref path, ref leaf_proof, ..} => {
+                        let mut path: Vec<usize> = path.iter().map(|pf| pf.idx).collect();
+                        path.push(leaf_proof.idx);
+                        (path, RangePath::KeyDNE(proof))
+                    }
+                }
+            }
+        };
+
+        let (size, bvs) = self.root.borrow().compute_range_size(left_path.as_slice(), right_path.as_slice(), 0);
+
+        let proof = RangeProof {
+            left_path: left_range_path,
+            right_path: right_range_path,
+            bitvecs: bvs
+        };
+
+        Ok(RangeResult {
+            proof,
+            root: Rc::clone(&self.root),
+            current_key: None,
+            size
+        })
     }
 }
 
