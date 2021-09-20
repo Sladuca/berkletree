@@ -650,4 +650,73 @@ mod tests {
 
         assert_eq!(cnt, 10);
     }
+
+    #[test]
+    fn test_all_bigish() {
+        let params = test_setup::<13>();
+        let verifier = KZGVerifier::new(&params);
+        let mut tree = BerkleTree::<13, 4, 4>::new(&params);
+
+        let rng = Rng::with_seed(420);
+
+        let keys: Vec<u32> = (0..100).map(|_| rng.u32(0..512)).collect();
+        let values: Vec<u32> = (0..100).map(|_| rng.u32(0..512)).collect();
+
+        let mut dupes: HashMap<u32, Vec<u32>> = HashMap::new();
+
+        // insert
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let hash = blake3::hash(&value.to_le_bytes());
+            let proof = tree
+                .insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
+
+            if !dupes.contains_key(key) {
+                dupes.insert(*key, vec![*value]);
+            } else {
+                let vs = dupes.get_mut(key).unwrap();
+                vs.push(*value);
+            }
+
+            assert_is_b_tree(&tree);
+
+            println!("------\n");
+            println!("{:#?}", tree);
+            assert!(
+                proof.verify(&key.to_le_bytes(), hash, &verifier),
+                "proof verification for ({:?}, {:?}) failed",
+                key,
+                value
+            );
+        }
+
+        // get
+        let mut idxs: Vec<usize> = (0..100).collect();
+        rng.shuffle(idxs.as_mut_slice());
+        for i in idxs {
+            let res = tree.get(&keys[i].to_le_bytes()).unwrap();
+            match res {
+                GetResult::Found(value, proof) => {
+                    let vs = dupes.get(&keys[i]).expect("expect dupes to contain key");
+                    assert!(vs.contains(&u32::from_le_bytes(value)));
+
+                    assert!(proof.verify(&keys[i].to_le_bytes(), blake3::hash(&value), &verifier));
+                }
+                GetResult::NotFound(_proof) => panic!("expected key {} to be in tree!", keys[i]),
+            }
+        }
+
+        // delete
+        let idxs: Vec<usize> = (0..10).map(|_| rng.usize(0..100)).collect();
+        for i in idxs {
+            let key = keys[i];
+            match tree.delete(&key.to_le_bytes()) {
+                Ok(DeleteResult::Deleted(v, hash)) => {
+                    assert_is_b_tree(&tree);
+                    assert_eq!(blake3::hash(&v), hash);
+                }
+                _ => panic!("delete({}) either failed or was NotFound!", key)
+            }
+        }
+    }
 }
