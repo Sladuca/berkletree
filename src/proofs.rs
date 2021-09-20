@@ -513,27 +513,17 @@ pub struct RangeResult<'params, const Q: usize, const MAX_KEY_LEN: usize, const 
     pub(crate) proof: RangeProof<MAX_KEY_LEN, MAX_VAL_LEN>,
     pub(crate) root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
     // when iterating, this gets set
-    pub(crate) current_path: Either<Vec<usize>, Vec<usize>>,
-    pub(crate) size: usize
+    pub(crate) current_path: Vec<usize>
 }
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Iterator for RangeResult<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
     type Item = (KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN]);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let res = match self.current_path {
-            Either::Left(ref mut path) => {
-                self.root.borrow().advance_path_by_one(path.as_mut_slice())
-            },
-            Either::Right(ref path) => {
-                let res = self.root.borrow().get_by_path(path.as_slice());
-                self.current_path = Either::Left(path.clone());
-                Some(res)
-            }
-        };
+        let res = self.root.borrow().advance_path_by_one(self.current_path.as_mut_slice());
 
         res.map_or(None, |(key, val)| {
-            if key.0 > self.left {
+            if key.0 > self.right {
                 None
             } else {
                 Some((key, val))

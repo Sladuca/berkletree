@@ -372,7 +372,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             }
         };
 
-        let (size, bvs) = self.root.borrow().compute_range_size(left_path.as_slice(), right_path.as_slice(), 0);
+        let bvs = self.root.borrow().compute_range_bvs(left_path.as_slice(), right_path.as_slice(), 0);
 
         let proof = RangeProof {
             left_path: left_range_path,
@@ -384,10 +384,9 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         Ok(RangeResult {
             proof,
             root: self.root.clone(),
-            current_path: Either::Right(left_path.clone()),
+            current_path: left_path.clone(),
             left: left_padded,
             right: right_padded,
-            size
         })
     }
 }
@@ -580,23 +579,75 @@ mod tests {
 
         let left: u32 = 9;
         let right: u32 = 9;
-        let mut res = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+        let mut range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
 
-        let next = res.next();
+        let next = range.next();
 
         assert!(next.is_some(), "range should be inclusive!");
         let next = next.unwrap();
         assert_eq!(next.0.0, (9 as u32).to_le_bytes());
         assert_eq!(next.1, (5 as u32).to_le_bytes());
 
-        let _ = res;
+        let left: u32 = 2;
+        let right: u32 = 19;
+
+        let range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+
+        let mut cnt = 0;
+        for (i, (k, v)) in range.enumerate() {
+            println!("{}, expected {:?}, got {:?}", i, keys[i+1].to_le_bytes(), k.0);
+            assert_eq!(k.0, keys[i+1].to_le_bytes());
+            assert_eq!(v, values[i+1].to_le_bytes());
+            cnt += 1;
+        }
+        assert_eq!(cnt, 7);
+
+        // test with dupes
+
+        let mut tree = BerkleTree::<5, 4, 4>::new(&params);
+
+        // build tree
+        let keys: Vec<u32> = vec![1, 2, 3, 5, 9, 9, 18, 19, 19, 19, 19, 20, 24, 26, 29, 35, 38, 42, 51];
+        let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let hash = blake3::hash(&value.to_le_bytes());
+            tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
+
+            assert_is_b_tree(&tree);
+        }
+
+        let left: u32 = 9;
+        let right: u32 = 9;
+        let mut range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+
+        let next = range.next();
+
+        assert!(next.is_some(), "range should be inclusive!");
+        let next = next.unwrap();
+        assert_eq!(next.0.0, (9 as u32).to_le_bytes());
+        assert_eq!(next.1, (5 as u32).to_le_bytes());
+
+        let next = range.next();
+
+        assert!(next.is_some(), "range should also get dupes!");
+        let next = next.unwrap();
+        assert_eq!(next.0.0, (9 as u32).to_le_bytes());
+        assert_eq!(next.1, (6 as u32).to_le_bytes());
 
         let left: u32 = 2;
         let right: u32 = 19;
 
-        for (i, (k, v)) in tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap().enumerate() {
+        let range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+
+        let mut cnt = 0;
+        for (i, (k, v)) in range.enumerate() {
             assert_eq!(k.0, keys[i+1].to_le_bytes());
             assert_eq!(v, values[i+1].to_le_bytes());
+            cnt += 1;
         }
+
+        assert_eq!(cnt, 10);
     }
 }

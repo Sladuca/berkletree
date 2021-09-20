@@ -419,10 +419,15 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    fn compute_subtree_size(&self, level: usize) -> (usize, Vec<BitVec>) {
+    fn compute_subtree_bvs(&self, level: usize) ->  Vec<BitVec> {
         match self {
-            Node::Internal(ref node) => node.children.iter().fold((0, vec![BitVec::new()]), |(size, mut bvs), child| {
-                let (s, next_bvs) = child.compute_subtree_size(level + 1);
+            Node::Internal(ref node) => node.children.iter().fold(vec![BitVec::new()], |mut bvs, child| {
+                let next_bvs = child.compute_subtree_bvs(level + 1);
+
+                if bvs.len() < next_bvs.len() {
+                    bvs.extend(vec![BitVec::new(); next_bvs.len() - bvs.len()]);
+                }
+
                 bvs.iter_mut().zip(next_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
 
                 let mut bv = bitvec![0; node.keys.len()];
@@ -431,42 +436,40 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                 bvs[level] = bv;
 
-                (size + s, bvs)
+                bvs
             }),
             Node::Leaf(ref node) => {
                 let mut bvs = vec![BitVec::new(); level + 1];
-                let s = node.keys.len();
-                let mut bv = bitvec![0; s];
+                let mut bv = bitvec![0; node.keys.len()];
                 *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                *(bv.as_mut_bitslice().get_mut(s-1).unwrap()) = true;
+                *(bv.as_mut_bitslice().get_mut(node.keys.len()-1).unwrap()) = true;
 
                 bvs[level] = bv;
 
-                (s, bvs)
+                bvs
             }
 
         }
     }
 
-    fn compute_range_edge_size(&self, is_left: bool, path: &[usize], level: usize) -> (usize, Vec<BitVec>) {
+    fn compute_range_edge_bvs(&self, is_left: bool, path: &[usize], level: usize) -> Vec<BitVec> {
         let idx = path[0];
         match self {
             Node::Internal(ref node) => {
-                let (recurse_range, (mut total, mut bvs)) = match is_left {
+                let (recurse_range, mut bvs) = match is_left {
                     true => (
                         (idx + 1)..node.keys.len(),
-                        node.children[idx].compute_range_edge_size(is_left, &path[1..], level + 1)
+                        node.children[idx].compute_range_edge_bvs(is_left, &path[1..], level + 1)
                     ),
                     false => (
                         0..idx,
-                        node.children[idx].compute_range_edge_size(is_left, &path[1..], level + 1)
+                        node.children[idx].compute_range_edge_bvs(is_left, &path[1..], level + 1)
                     ),
                 };
 
                 for i in recurse_range {
-                    let (subtree_size, subtree_bvs) = node.children[i].compute_subtree_size(level + 1);
+                    let subtree_bvs = node.children[i].compute_subtree_bvs(level + 1);
 
-                    total += subtree_size;
                     bvs.iter_mut().zip(subtree_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
                 }
 
@@ -476,54 +479,58 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                 bvs[level] = bv;
 
-                (total, bvs)
+                bvs
             }
             Node::Leaf(ref node) => {
                 let mut bvs = vec![BitVec::new(); level + 1];
 
                 let mut bv = bitvec![0; node.keys.len()];
-                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
+
+                if is_left {
+                    *(bv.as_mut_bitslice().get_mut(idx).unwrap()) = true;
+                    *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
+                } else {
+                    *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
+                    *(bv.as_mut_bitslice().get_mut(idx).unwrap()) = true;
+                }
 
                 bvs[level] = bv;
 
                 match is_left {
-                    true => (node.keys.len() - idx, bvs),
-                    false => (idx + 1, bvs)
+                    true => bvs,
+                    false => bvs
                 }
             }
         }
     }
 
-    pub(crate) fn compute_range_size(&self, left_path: &[usize], right_path: &[usize], level: usize) -> (usize, Vec<BitVec>) {
+    pub(crate) fn compute_range_bvs(&self, left_path: &[usize], right_path: &[usize], level: usize) -> Vec<BitVec> {
         let left = left_path[0];
         let right = right_path[0];
 
         match self {
             Node::Internal(ref node) => {
                 if left == right {
-                    node.children[left].compute_range_size(&left_path[1..], &right_path[1..], level + 1)
+                    node.children[left].compute_range_bvs(&left_path[1..], &right_path[1..], level + 1)
                 } else {
-                    let (mut total, mut bvs) = node.children[left].compute_range_edge_size(true, &left_path[1..], level + 1);
-                    let (right_total, right_bvs) = node.children[right].compute_range_edge_size(false, &right_path[1..], level + 1);
+                    let mut bvs = node.children[left].compute_range_edge_bvs(true, &left_path[1..], level + 1);
+                    let right_bvs = node.children[right].compute_range_edge_bvs(false, &right_path[1..], level + 1);
 
 
                     
                     for i in left..right {
-                        let (subtree_size, subtree_bvs) = node.children[i].compute_subtree_size(level + 1);
+                        let subtree_bvs = node.children[i].compute_subtree_bvs(level + 1);
 
-                        total += subtree_size;
                         bvs.iter_mut().zip(subtree_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
                     }
 
-                    total += right_total;
                     bvs.iter_mut().zip(right_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
 
                     let mut bv = bitvec![0; node.keys.len()];
                     *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
                     *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
 
-                    (total, bvs)
+                    bvs
                 }
             }
             Node::Leaf(ref node) => {
@@ -534,7 +541,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                 bvs[level] = bv;
 
-                (right - left + 1, bvs)
+                bvs
             }
         }
     }
@@ -552,32 +559,31 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         match self {
             Node::Internal(node) => {
                 loop {
-                    let res = node.children[idx].advance_path_by_one(&mut path[1..]);
-                    if res.is_some() {
-                        path[0] = idx;
-                        // got the next one, return back up
-                        break res
-                    } else if idx == node.keys.len() - 1 {
-                        // advance to the next sibling via backtrack
+                    if idx == node.keys.len() {
                         idx = 0;
                         path[0] = idx;
                         break None
+                    }
+
+                    let res = node.children[idx].advance_path_by_one(&mut path[1..]);
+                    if res.is_some() {
+                        path[0] = idx;
+                        break res
                     } else {
-                        // advance to the next child
                         idx += 1;
                     }
                 }
             },
             Node::Leaf(node) => {
-                if idx == node.keys.len() - 1 {
-                    // advance to the next sibling via backtrack
+                if idx == node.keys.len() {
                     idx = 0;
                     path[0] = idx;
                     None
                 } else {
+                    let res = Some((node.keys[idx].clone(), node.values[idx].clone()));
                     idx += 1;
                     path[0] = idx;
-                    Some((node.keys[idx].clone(), node.values[idx].clone()))
+                    res
                 }
             }
         }
@@ -1138,13 +1144,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
     pub(crate) fn get(&mut self, key: &[u8; MAX_KEY_LEN]) -> GetResult<MAX_KEY_LEN, MAX_VAL_LEN> {
         let idx = self.get_key_traversal_idx(key);
-        println!(
-            "(internal) get({:?}), keys: {:?}, node_size: {}, idx: {}",
-            key,
-            &self.keys,
-            self.keys.len(),
-            idx
-        );
+        // println!(
+        //     "(internal) get({:?}), keys: {:?}, node_size: {}, idx: {}",
+        //     key,
+        //     &self.keys,
+        //     self.keys.len(),
+        //     idx
+        // );
         self.get_inner(idx, key)
     }
 
@@ -1466,12 +1472,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         &mut self,
         key: &[u8; MAX_KEY_LEN],
     ) -> Either<LeafGetFound<MAX_VAL_LEN>, LeafGetNotFound<MAX_KEY_LEN, MAX_VAL_LEN>> {
-        println!(
-            "(leaf) get({:?}) keys: {:?}, node_size: {}",
-            key,
-            &self.keys,
-            self.keys.len()
-        );
+        // println!(
+        //     "(leaf) get({:?}) keys: {:?}, node_size: {}",
+        //     key,
+        //     &self.keys,
+        //     self.keys.len()
+        // );
         let commitment = self
             .prover
             .commitment()
