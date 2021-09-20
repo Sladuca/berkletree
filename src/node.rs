@@ -438,7 +438,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 let s = node.keys.len();
                 let mut bv = bitvec![0; s];
                 *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                *(bv.as_mut_bitslice().get_mut(s).unwrap()) = true;
+                *(bv.as_mut_bitslice().get_mut(s-1).unwrap()) = true;
 
                 bvs[level] = bv;
 
@@ -536,6 +536,14 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
                 (right - left + 1, bvs)
             }
+        }
+    }
+
+    pub(crate) fn get_by_path(&self, path: &[usize]) -> (KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN]) {
+        let idx = path[0];
+        match self {
+            Node::Internal(node) => node.children[idx].get_by_path(&path[1..]),
+            Node::Leaf(node) => (node.keys[idx].clone(), node.values[idx].clone())
         }
     }
 

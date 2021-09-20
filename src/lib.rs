@@ -1,5 +1,6 @@
 use blake3::Hash as Blake3Hash;
 use bls12_381::{Bls12, Scalar};
+use either::Either;
 use kzg::{KZGParams, KZGProver};
 use std::cmp::{Ord, PartialEq, PartialOrd};
 use std::{
@@ -294,26 +295,30 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             Ok(res)
         }
     }
-}
 
-impl<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
-    BerkleTree<'static, Q, MAX_KEY_LEN, MAX_VAL_LEN>
-{
   pub fn range<K>(
-        &'static mut self,
+        &mut self,
         left: &K,
         right: &K,
-    ) -> Result<RangeResult<Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
+    ) -> Result<RangeResult<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>, BerkleError>
     where
         K: AsRef<[u8]>,
     {
+        let mut left_padded = [0; MAX_KEY_LEN];
+        let mut right_padded= [0; MAX_KEY_LEN];
+
+        left_padded[0..left.as_ref().len()].copy_from_slice(left.as_ref());
+        right_padded[0..right.as_ref().len()].copy_from_slice(right.as_ref());
 
         let left = self.get(left)?;
         let right = self.get(right)?;
 
         let (left_path, left_range_path) = match left {
             GetResult::Found(_, proof) => {
-                (proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect(), RangePath::KeyExists(proof))
+                let mut path: Vec<usize> = proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect();
+                path.push(proof.leaf.idx);
+
+                (path, RangePath::KeyExists(proof))
             },
             GetResult::NotFound(proof) => {
                 match proof {
@@ -340,7 +345,10 @@ impl<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
 
         let (right_path, right_range_path)= match right {
             GetResult::Found(_, proof) => {
-                (proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect(), RangePath::KeyExists(proof))
+                let mut path: Vec<usize> = proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect();
+                path.push(proof.leaf.idx);
+
+                (path, RangePath::KeyExists(proof))
             },
             GetResult::NotFound(proof) => {
                 match proof {
@@ -372,10 +380,13 @@ impl<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
             bitvecs: bvs
         };
 
+
         Ok(RangeResult {
             proof,
-            root: Rc::clone(&self.root),
-            current_path: left_path.clone(),
+            root: self.root.clone(),
+            current_path: Either::Right(left_path.clone()),
+            left: left_padded,
+            right: right_padded,
             size
         })
     }
@@ -545,7 +556,47 @@ mod tests {
                 }
                 _ => panic!("delete({}) either failed or was NotFound!", key)
             }
+        }
+    }
 
+    #[test]
+    fn test_range() {
+        let params = test_setup::<5>();
+        let verifier = KZGVerifier::new(&params);
+        let mut tree = BerkleTree::<5, 4, 4>::new(&params);
+
+
+        // build tree
+        let keys: Vec<u32> = vec![1, 2, 3, 5, 9, 14, 18, 19, 20, 24, 26, 29, 35, 38, 42, 51];
+        let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let hash = blake3::hash(&value.to_le_bytes());
+            tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash)
+                .unwrap();
+
+            assert_is_b_tree(&tree);
+        }
+
+        let left: u32 = 9;
+        let right: u32 = 9;
+        let mut res = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+
+        let next = res.next();
+
+        assert!(next.is_some(), "range should be inclusive!");
+        let next = next.unwrap();
+        assert_eq!(next.0.0, (9 as u32).to_le_bytes());
+        assert_eq!(next.1, (5 as u32).to_le_bytes());
+
+        let _ = res;
+
+        let left: u32 = 2;
+        let right: u32 = 19;
+
+        for (i, (k, v)) in tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap().enumerate() {
+            assert_eq!(k.0, keys[i+1].to_le_bytes());
+            assert_eq!(v, values[i+1].to_le_bytes());
         }
     }
 }
