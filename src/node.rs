@@ -538,6 +538,42 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             }
         }
     }
+
+    pub(crate) fn advance_path_by_one(&self, path: &mut[usize]) -> Option<(KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN])> {
+        let mut idx = path[0];
+        match self {
+            Node::Internal(node) => {
+                loop {
+                    let res = node.children[idx].advance_path_by_one(&mut path[1..]);
+                    if res.is_some() {
+                        path[0] = idx;
+                        // got the next one, return back up
+                        break res
+                    } else if idx == node.keys.len() - 1 {
+                        // advance to the next sibling via backtrack
+                        idx = 0;
+                        path[0] = idx;
+                        break None
+                    } else {
+                        // advance to the next child
+                        idx += 1;
+                    }
+                }
+            },
+            Node::Leaf(node) => {
+                if idx == node.keys.len() - 1 {
+                    // advance to the next sibling via backtrack
+                    idx = 0;
+                    path[0] = idx;
+                    None
+                } else {
+                    idx += 1;
+                    path[0] = idx;
+                    Some((node.keys[idx].clone(), node.values[idx].clone()))
+                }
+            }
+        }
+    }
 }
 
 impl<const MAX_KEY_LEN: usize> KeyWithCounter<MAX_KEY_LEN> {

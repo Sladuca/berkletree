@@ -510,6 +510,14 @@ pub struct RangeResult<'params, const Q: usize, const MAX_KEY_LEN: usize, const 
     pub(crate) proof: RangeProof<MAX_KEY_LEN, MAX_VAL_LEN>,
     pub(crate) root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
     // when iterating, this gets set
-    pub(crate) current_key: Option<[u8; MAX_KEY_LEN]>,
+    pub(crate) current_path: Vec<usize>,
     pub(crate) size: usize
+}
+
+impl<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Iterator for RangeResult<'static, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
+    type Item = (KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.root.borrow_mut().advance_path_by_one(self.current_path.as_mut_slice())
+    }
 }

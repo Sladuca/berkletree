@@ -375,7 +375,7 @@ impl<const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
         Ok(RangeResult {
             proof,
             root: Rc::clone(&self.root),
-            current_key: None,
+            current_path: left_path.clone(),
             size
         })
     }
