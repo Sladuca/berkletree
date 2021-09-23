@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use blake3::Hash as Blake3Hash;
 use bls12_381::{Bls12, Scalar};
 use either::Either;
@@ -9,7 +10,6 @@ use std::{
     fmt::{Debug, Formatter},
     rc::Rc,
 };
-use bitvec::vec::BitVec;
 
 mod error;
 mod node;
@@ -20,7 +20,10 @@ mod test_utils;
 
 use error::BerkleError;
 use node::{InternalNode, LeafNode, Node};
-use proofs::{ContainsResult, GetResult, InnerNodeProof, MembershipProof, NonMembershipProof, RangePath, RangeProof, RangeResult};
+use proofs::{
+    ContainsResult, GetResult, InnerNodeProof, MembershipProof, NonMembershipProof, RangePath,
+    RangeProof, RangeResult,
+};
 
 use crate::proofs::DeleteResult;
 
@@ -101,8 +104,9 @@ pub(crate) fn null_key<const MAX_KEY_LEN: usize>() -> KeyWithCounter<MAX_KEY_LEN
 
 /// High level struct that user interacts with
 /// Q is the branching factor of the tree. More specifically, nodes can have at most Q - 1 keys.
-pub struct BerkleTree<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
-    params: &'params KZGParams<Bls12, Q>,
+pub struct BerkleTree<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
+{
+    params: &'params KZGParams<Bls12>,
     root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
     cnt: usize,
 }
@@ -120,7 +124,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
     BerkleTree<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
 {
-    pub fn new(params: &'params KZGParams<Bls12, Q>) -> Self {
+    pub fn new(params: &'params KZGParams<Bls12>) -> Self {
         assert!(Q > 2, "Branching factor Q must be greater than 2");
         BerkleTree {
             params,
@@ -154,10 +158,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
             let key = KeyWithCounter(key_padded, self.cnt);
 
-            let (mut proof, new_node) =
-                self.root
-                    .borrow_mut()
-                    .insert(&key, &value_padded, hash);
+            let (mut proof, new_node) = self.root.borrow_mut().insert(&key, &value_padded, hash);
 
             self.cnt += 1;
 
@@ -256,9 +257,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             // check to make sure key exists
             let path: Vec<usize> = match self.root.borrow_mut().get(&key_padded) {
                 GetResult::NotFound(proof) => return Ok(DeleteResult::NotFound(proof)),
-                GetResult::Found(_, proof) => {
-                    proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect()
-                }
+                GetResult::Found(_, proof) => proof
+                    .path
+                    .iter()
+                    .rev()
+                    .map(|inner_node_proof| inner_node_proof.idx)
+                    .collect(),
             };
 
             let mut root = self.root.borrow_mut();
@@ -275,15 +279,15 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             while node.keys.len() > 0 {
                                 let mut left = node.children.pop().unwrap();
                                 left.merge_from_right(right, key);
-                                
+
                                 right = left;
                                 key = node.keys.pop().unwrap();
                             }
 
                             (DeleteResult::Deleted(value, hash), Some(right))
-                        },
+                        }
                         // if root is leaf, we can ignore the min key constraint
-                        Node::Leaf(_) => (DeleteResult::Deleted(value, hash), None)
+                        Node::Leaf(_) => (DeleteResult::Deleted(value, hash), None),
                     }
                 }
             };
@@ -296,7 +300,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-  pub fn range<K>(
+    pub fn range<K>(
         &mut self,
         left: &K,
         right: &K,
@@ -305,7 +309,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         K: AsRef<[u8]>,
     {
         let mut left_padded = [0; MAX_KEY_LEN];
-        let mut right_padded= [0; MAX_KEY_LEN];
+        let mut right_padded = [0; MAX_KEY_LEN];
 
         left_padded[0..left.as_ref().len()].copy_from_slice(left.as_ref());
         right_padded[0..right.as_ref().len()].copy_from_slice(right.as_ref());
@@ -315,11 +319,16 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
         let (left_path, left_range_path) = match left {
             GetResult::Found(_, proof) => {
-                let mut path: Vec<usize> = proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect();
+                let mut path: Vec<usize> = proof
+                    .path
+                    .iter()
+                    .rev()
+                    .map(|inner_node_proof| inner_node_proof.idx)
+                    .collect();
                 path.push(proof.leaf.idx);
 
                 (path, RangePath::KeyExists(proof))
-            },
+            }
             GetResult::NotFound(proof) => {
                 match proof {
                     NonMembershipProof::IntraNode { ref path, idx, .. } => {
@@ -327,14 +336,27 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         // idx of IntraNode proof is the left element - we want the right one in this case
                         path.push(idx + 1);
                         (path, RangePath::KeyDNE(proof))
-                    },
-                    NonMembershipProof::InterNode { ref common_path, ref right_path, ref right, ..} => {
-                        let mut path: Vec<usize> = common_path.as_ref().map_or(Vec::with_capacity(right_path.len()), |p| p.iter().rev().map(|pf| pf.idx).collect());
+                    }
+                    NonMembershipProof::InterNode {
+                        ref common_path,
+                        ref right_path,
+                        ref right,
+                        ..
+                    } => {
+                        let mut path: Vec<usize> = common_path
+                            .as_ref()
+                            .map_or(Vec::with_capacity(right_path.len()), |p| {
+                                p.iter().rev().map(|pf| pf.idx).collect()
+                            });
                         path.extend(right_path.iter().map(|pf| pf.idx));
                         path.push(right.idx);
                         (path, RangePath::KeyDNE(proof))
-                    },
-                    NonMembershipProof::Edge { ref path, ref leaf_proof, ..} => {
+                    }
+                    NonMembershipProof::Edge {
+                        ref path,
+                        ref leaf_proof,
+                        ..
+                    } => {
                         let mut path: Vec<usize> = path.iter().rev().map(|pf| pf.idx).collect();
                         path.push(leaf_proof.idx);
                         (path, RangePath::KeyDNE(proof))
@@ -343,43 +365,63 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             }
         };
 
-        let (right_path, right_range_path)= match right {
+        let (right_path, right_range_path) = match right {
             GetResult::Found(_, proof) => {
-                let mut path: Vec<usize> = proof.path.iter().rev().map(|inner_node_proof| inner_node_proof.idx).collect();
+                let mut path: Vec<usize> = proof
+                    .path
+                    .iter()
+                    .rev()
+                    .map(|inner_node_proof| inner_node_proof.idx)
+                    .collect();
                 path.push(proof.leaf.idx);
 
                 (path, RangePath::KeyExists(proof))
-            },
-            GetResult::NotFound(proof) => {
-                match proof {
-                    NonMembershipProof::IntraNode { ref path, idx, .. } => {
-                        let mut path: Vec<usize> = path.iter().rev().map(|pf| pf.idx).collect();
-                        path.push(idx);
-                        (path, RangePath::KeyDNE(proof))
-                    },
-                    NonMembershipProof::InterNode { ref common_path, ref left_path, ref left, ..} => {
-                        let mut path: Vec<usize> = common_path.as_ref().map_or(Vec::with_capacity(left_path.len()), |p| p.iter().rev().map(|pf| pf.idx).collect());
-                        path.extend(left_path.iter().map(|pf| pf.idx));
-                        path.push(left.idx);
-                        (path, RangePath::KeyDNE(proof))
-                    },
-                    NonMembershipProof::Edge { ref path, ref leaf_proof, ..} => {
-                        let mut path: Vec<usize> = path.iter().map(|pf| pf.idx).collect();
-                        path.push(leaf_proof.idx);
-                        (path, RangePath::KeyDNE(proof))
-                    }
-                }
             }
+            GetResult::NotFound(proof) => match proof {
+                NonMembershipProof::IntraNode { ref path, idx, .. } => {
+                    let mut path: Vec<usize> = path.iter().rev().map(|pf| pf.idx).collect();
+                    path.push(idx);
+                    (path, RangePath::KeyDNE(proof))
+                }
+                NonMembershipProof::InterNode {
+                    ref common_path,
+                    ref left_path,
+                    ref left,
+                    ..
+                } => {
+                    let mut path: Vec<usize> = common_path
+                        .as_ref()
+                        .map_or(Vec::with_capacity(left_path.len()), |p| {
+                            p.iter().rev().map(|pf| pf.idx).collect()
+                        });
+                    path.extend(left_path.iter().map(|pf| pf.idx));
+                    path.push(left.idx);
+                    (path, RangePath::KeyDNE(proof))
+                }
+                NonMembershipProof::Edge {
+                    ref path,
+                    ref leaf_proof,
+                    ..
+                } => {
+                    let mut path: Vec<usize> = path.iter().map(|pf| pf.idx).collect();
+                    path.push(leaf_proof.idx);
+                    (path, RangePath::KeyDNE(proof))
+                }
+            },
         };
 
-        let bvs = self.root.borrow().compute_range_bvs(left_path.as_slice(), right_path.as_slice(), 0);
+        let (bitvecs, witnesses, commitments) =
+            self.root
+                .borrow()
+                .compute_range_proof(left_path.as_slice(), right_path.as_slice(), 0);
 
         let proof = RangeProof {
             left_path: left_range_path,
             right_path: right_range_path,
-            bitvecs: bvs
+            bitvecs,
+            witnesses,
+            commitments
         };
-
 
         Ok(RangeResult {
             proof,
@@ -402,10 +444,10 @@ mod tests {
 
     const RAND_SEED: u64 = 42;
 
-    fn test_setup<const Q: usize>() -> KZGParams<Bls12, Q> {
+    fn test_setup<const Q: usize>() -> KZGParams<Bls12> {
         let rng = Rng::with_seed(420);
         let s: Scalar = rng.u64(0..u64::MAX).into();
-        kzg::setup(s)
+        kzg::setup(s, Q + 1)
     }
 
     #[test]
@@ -480,7 +522,7 @@ mod tests {
             let hash = blake3::hash(&value.to_le_bytes());
             tree.insert(key.to_le_bytes(), value.to_le_bytes(), hash)
                 .unwrap();
-            
+
             assert_is_b_tree(&tree);
         }
 
@@ -535,7 +577,7 @@ mod tests {
             } else {
                 pairs.insert(*key, vec![*value]);
             }
-            
+
             assert_is_b_tree(&tree);
         }
 
@@ -549,11 +591,10 @@ mod tests {
                     let vs = pairs.get(key).expect("expect pairs to contain key");
                     assert!(vs.contains(&u32::from_le_bytes(v)));
 
-
                     // check hash
                     assert_eq!(blake3::hash(&v), hash);
                 }
-                _ => panic!("delete({}) either failed or was NotFound!", key)
+                _ => panic!("delete({}) either failed or was NotFound!", key),
             }
         }
     }
@@ -563,7 +604,6 @@ mod tests {
         let params = test_setup::<5>();
         let verifier = KZGVerifier::new(&params);
         let mut tree = BerkleTree::<5, 4, 4>::new(&params);
-
 
         // build tree
         let keys: Vec<u32> = vec![1, 2, 3, 5, 9, 14, 18, 19, 20, 24, 26, 29, 35, 38, 42, 51];
@@ -579,25 +619,34 @@ mod tests {
 
         let left: u32 = 9;
         let right: u32 = 9;
-        let mut range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+        let mut range = tree
+            .range(&left.to_le_bytes(), &right.to_le_bytes())
+            .unwrap();
 
         let next = range.next();
 
         assert!(next.is_some(), "range should be inclusive!");
         let next = next.unwrap();
-        assert_eq!(next.0.0, (9 as u32).to_le_bytes());
+        assert_eq!(next.0 .0, (9 as u32).to_le_bytes());
         assert_eq!(next.1, (5 as u32).to_le_bytes());
 
         let left: u32 = 2;
         let right: u32 = 19;
 
-        let range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+        let range = tree
+            .range(&left.to_le_bytes(), &right.to_le_bytes())
+            .unwrap();
 
         let mut cnt = 0;
         for (i, (k, v)) in range.enumerate() {
-            println!("{}, expected {:?}, got {:?}", i, keys[i+1].to_le_bytes(), k.0);
-            assert_eq!(k.0, keys[i+1].to_le_bytes());
-            assert_eq!(v, values[i+1].to_le_bytes());
+            println!(
+                "{}, expected {:?}, got {:?}",
+                i,
+                keys[i + 1].to_le_bytes(),
+                k.0
+            );
+            assert_eq!(k.0, keys[i + 1].to_le_bytes());
+            assert_eq!(v, values[i + 1].to_le_bytes());
             cnt += 1;
         }
         assert_eq!(cnt, 7);
@@ -607,8 +656,12 @@ mod tests {
         let mut tree = BerkleTree::<5, 4, 4>::new(&params);
 
         // build tree
-        let keys: Vec<u32> = vec![1, 2, 3, 5, 9, 9, 18, 19, 19, 19, 19, 20, 24, 26, 29, 35, 38, 42, 51];
-        let values: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+        let keys: Vec<u32> = vec![
+            1, 2, 3, 5, 9, 9, 18, 19, 19, 19, 19, 20, 24, 26, 29, 35, 38, 42, 51,
+        ];
+        let values: Vec<u32> = vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        ];
 
         for (key, value) in keys.iter().zip(values.iter()) {
             let hash = blake3::hash(&value.to_le_bytes());
@@ -620,31 +673,35 @@ mod tests {
 
         let left: u32 = 9;
         let right: u32 = 9;
-        let mut range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+        let mut range = tree
+            .range(&left.to_le_bytes(), &right.to_le_bytes())
+            .unwrap();
 
         let next = range.next();
 
         assert!(next.is_some(), "range should be inclusive!");
         let next = next.unwrap();
-        assert_eq!(next.0.0, (9 as u32).to_le_bytes());
+        assert_eq!(next.0 .0, (9 as u32).to_le_bytes());
         assert_eq!(next.1, (5 as u32).to_le_bytes());
 
         let next = range.next();
 
         assert!(next.is_some(), "range should also get dupes!");
         let next = next.unwrap();
-        assert_eq!(next.0.0, (9 as u32).to_le_bytes());
+        assert_eq!(next.0 .0, (9 as u32).to_le_bytes());
         assert_eq!(next.1, (6 as u32).to_le_bytes());
 
         let left: u32 = 2;
         let right: u32 = 19;
 
-        let range = tree.range(&left.to_le_bytes(), &right.to_le_bytes()).unwrap();
+        let range = tree
+            .range(&left.to_le_bytes(), &right.to_le_bytes())
+            .unwrap();
 
         let mut cnt = 0;
         for (i, (k, v)) in range.enumerate() {
-            assert_eq!(k.0, keys[i+1].to_le_bytes());
-            assert_eq!(v, values[i+1].to_le_bytes());
+            assert_eq!(k.0, keys[i + 1].to_le_bytes());
+            assert_eq!(v, values[i + 1].to_le_bytes());
             cnt += 1;
         }
 
@@ -659,8 +716,8 @@ mod tests {
 
         let rng = Rng::with_seed(420);
 
-        let keys: Vec<u32> = (0..100).map(|_| rng.u32(0..512)).collect();
-        let values: Vec<u32> = (0..100).map(|_| rng.u32(0..512)).collect();
+        let keys: Vec<u32> = (0..50).map(|_| rng.u32(0..512)).collect();
+        let values: Vec<u32> = (0..50).map(|_| rng.u32(0..512)).collect();
 
         let mut dupes: HashMap<u32, Vec<u32>> = HashMap::new();
 
@@ -679,19 +736,10 @@ mod tests {
             }
 
             assert_is_b_tree(&tree);
-
-            println!("------\n");
-            println!("{:#?}", tree);
-            assert!(
-                proof.verify(&key.to_le_bytes(), hash, &verifier),
-                "proof verification for ({:?}, {:?}) failed",
-                key,
-                value
-            );
         }
 
         // get
-        let mut idxs: Vec<usize> = (0..100).collect();
+        let mut idxs: Vec<usize> = (0..50).collect();
         rng.shuffle(idxs.as_mut_slice());
         for i in idxs {
             let res = tree.get(&keys[i].to_le_bytes()).unwrap();
@@ -707,7 +755,7 @@ mod tests {
         }
 
         // delete
-        let idxs: Vec<usize> = (0..10).map(|_| rng.usize(0..100)).collect();
+        let idxs: Vec<usize> = (0..8).map(|_| rng.usize(0..50)).collect();
         for i in idxs {
             let key = keys[i];
             match tree.delete(&key.to_le_bytes()) {
@@ -715,7 +763,7 @@ mod tests {
                     assert_is_b_tree(&tree);
                     assert_eq!(blake3::hash(&v), hash);
                 }
-                _ => panic!("delete({}) either failed or was NotFound!", key)
+                _ => panic!("delete({}) either failed or was NotFound!", key),
             }
         }
     }

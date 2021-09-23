@@ -6,6 +6,7 @@ use std::{
     convert::{TryFrom, TryInto},
     fmt,
     fmt::{Debug, Formatter},
+    ops::Range,
     process::Child,
 };
 
@@ -22,7 +23,8 @@ use crate::{null_key, FieldHash, KeyWithCounter};
 
 /// enum reprenting the different kinds of nodes for
 #[derive(Clone)]
-pub enum Node<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
+pub enum Node<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
+{
     Internal(InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>),
     Leaf(LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>),
 }
@@ -80,7 +82,8 @@ pub(crate) enum ChildOrValue<
     const Q: usize,
     const MAX_KEY_LEN: usize,
     const MAX_VAL_LEN: usize,
-> {
+> 
+{
     Value([u8; MAX_VAL_LEN], Blake3Hash),
     Child(Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>),
 }
@@ -98,6 +101,12 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 }
+
+pub(crate) type RangeProofTuple = (
+    Vec<BitVec>,
+    Vec<Vec<KZGBatchWitness<Bls12>>>,
+    Vec<Vec<KZGCommitment<Bls12>>>,
+);
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
     Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
@@ -160,6 +169,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
+    pub(crate) fn get_batch_witness(&self, idxs: Range<usize>) -> KZGBatchWitness<Bls12> {
+        match self {
+            Node::Internal(node) => node.get_batch_witness(idxs),
+            Node::Leaf(node) => node.get_batch_witness(idxs),
+        }
+    }
+
     pub(crate) fn split_back(
         &mut self,
         at: usize,
@@ -188,7 +204,11 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    pub(crate) fn merge_from_left(&mut self, other: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>, split_key: KeyWithCounter<MAX_KEY_LEN>) {
+    pub(crate) fn merge_from_left(
+        &mut self,
+        other: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        split_key: KeyWithCounter<MAX_KEY_LEN>,
+    ) {
         match (self, other) {
             (Node::Internal(node), Node::Internal(other)) => {
                 let mut old_keys = std::mem::replace(&mut node.keys, other.keys);
@@ -212,7 +232,11 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    pub(crate) fn merge_from_right(&mut self, other: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>, split_key: KeyWithCounter<MAX_KEY_LEN>) {
+    pub(crate) fn merge_from_right(
+        &mut self,
+        other: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
+        split_key: KeyWithCounter<MAX_KEY_LEN>,
+    ) {
         match (self, other) {
             (Node::Internal(node), Node::Internal(other)) => {
                 let mut keys = other.keys;
@@ -301,7 +325,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     ) -> (
         MembershipProof<MAX_KEY_LEN>,
         Option<(
-            KeyWithCounter<MAX_KEY_LEN>, 
+            KeyWithCounter<MAX_KEY_LEN>,
             Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
         )>,
     ) {
@@ -399,11 +423,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     pub(crate) fn delete(
         &mut self,
         key: &[u8; MAX_KEY_LEN],
-        idxs: &[usize]
+        idxs: &[usize],
     ) -> (([u8; MAX_VAL_LEN], Blake3Hash), usize, bool) {
         match self {
             Node::Internal(node) => {
-
                 let idx = idxs[0];
 
                 let mut res = node.children[idx].delete(key, &idxs[1..]);
@@ -414,164 +437,256 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                     // handle merge
                     ((value, hash), idx, true) => ((value, hash), idx, node.merge_child(idx)),
                 }
-            },
+            }
             Node::Leaf(node) => node.delete(key),
         }
     }
 
-    fn compute_subtree_bvs(&self, level: usize) ->  Vec<BitVec> {
+    fn compute_subtree_range_proof(&self, level: usize) -> RangeProofTuple {
         match self {
-            Node::Internal(ref node) => node.children.iter().fold(vec![BitVec::new()], |mut bvs, child| {
-                let next_bvs = child.compute_subtree_bvs(level + 1);
+            Node::Internal(ref node) => node.children.iter().fold(
+                (vec![BitVec::new()], vec![Vec::new()], vec![Vec::new()]),
+                |(mut bvs, mut witnesses, mut commitments), child| {
+                    let (next_bvs, next_witnesses, next_commitments) =
+                        child.compute_subtree_range_proof(level + 1);
 
-                if bvs.len() < next_bvs.len() {
-                    bvs.extend(vec![BitVec::new(); next_bvs.len() - bvs.len()]);
-                }
-
-                bvs.iter_mut().zip(next_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
-
-                let mut bv = bitvec![0; node.keys.len()];
-                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
-
-                bvs[level] = bv;
-
-                bvs
-            }),
-            Node::Leaf(ref node) => {
-                let mut bvs = vec![BitVec::new(); level + 1];
-                let mut bv = bitvec![0; node.keys.len()];
-                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                *(bv.as_mut_bitslice().get_mut(node.keys.len()-1).unwrap()) = true;
-
-                bvs[level] = bv;
-
-                bvs
-            }
-
-        }
-    }
-
-    fn compute_range_edge_bvs(&self, is_left: bool, path: &[usize], level: usize) -> Vec<BitVec> {
-        let idx = path[0];
-        match self {
-            Node::Internal(ref node) => {
-                let (recurse_range, mut bvs) = match is_left {
-                    true => (
-                        (idx + 1)..node.keys.len(),
-                        node.children[idx].compute_range_edge_bvs(is_left, &path[1..], level + 1)
-                    ),
-                    false => (
-                        0..idx,
-                        node.children[idx].compute_range_edge_bvs(is_left, &path[1..], level + 1)
-                    ),
-                };
-
-                for i in recurse_range {
-                    let subtree_bvs = node.children[i].compute_subtree_bvs(level + 1);
-
-                    bvs.iter_mut().zip(subtree_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
-                }
-
-                let mut bv = bitvec![0; node.keys.len()];
-                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
-
-                bvs[level] = bv;
-
-                bvs
-            }
-            Node::Leaf(ref node) => {
-                let mut bvs = vec![BitVec::new(); level + 1];
-
-                let mut bv = bitvec![0; node.keys.len()];
-
-                if is_left {
-                    *(bv.as_mut_bitslice().get_mut(idx).unwrap()) = true;
-                    *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
-                } else {
-                    *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
-                    *(bv.as_mut_bitslice().get_mut(idx).unwrap()) = true;
-                }
-
-                bvs[level] = bv;
-
-                match is_left {
-                    true => bvs,
-                    false => bvs
-                }
-            }
-        }
-    }
-
-    pub(crate) fn compute_range_bvs(&self, left_path: &[usize], right_path: &[usize], level: usize) -> Vec<BitVec> {
-        let left = left_path[0];
-        let right = right_path[0];
-
-        match self {
-            Node::Internal(ref node) => {
-                if left == right {
-                    node.children[left].compute_range_bvs(&left_path[1..], &right_path[1..], level + 1)
-                } else {
-                    let mut bvs = node.children[left].compute_range_edge_bvs(true, &left_path[1..], level + 1);
-                    let right_bvs = node.children[right].compute_range_edge_bvs(false, &right_path[1..], level + 1);
-
-
-                    
-                    for i in left..right {
-                        let subtree_bvs = node.children[i].compute_subtree_bvs(level + 1);
-
-                        bvs.iter_mut().zip(subtree_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
+                    if bvs.len() < next_bvs.len() {
+                        bvs.extend(vec![BitVec::new(); next_bvs.len() - bvs.len()]);
+                        witnesses.extend(vec![Vec::new(); next_witnesses.len() - witnesses.len()]);
+                        commitments.extend(vec![Vec::new(); next_commitments.len() - commitments.len()]);
                     }
 
-                    bvs.iter_mut().zip(right_bvs.iter()).for_each(|(dst, src)| dst.extend(src));
+                    bvs.iter_mut()
+                        .zip(next_bvs.iter())
+                        .for_each(|(dst, src)| dst.extend(src));
+                    witnesses
+                        .iter_mut()
+                        .zip(next_witnesses.iter())
+                        .for_each(|(dst, src)| dst.extend_from_slice(src.as_slice()));
+                    commitments
+                        .iter_mut()
+                        .zip(next_commitments.iter())
+                        .for_each(|(dst, src)| dst.extend(src));
 
                     let mut bv = bitvec![0; node.keys.len()];
                     *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
                     *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
 
-                    bvs
+                    witnesses[level].push(node.get_batch_witness(0..node.keys.len()));
+                    commitments[level].push(node.prover.commitment().unwrap());
+                    bvs[level].extend(bv);
+
+                    (bvs, witnesses, commitments)
+                },
+            ),
+            Node::Leaf(ref node) => {
+                let mut bvs = vec![BitVec::new(); level + 1];
+                let mut bv = bitvec![0; node.keys.len()];
+                let mut witnesses = vec![Vec::new(); level + 1];
+                let mut commitments = vec![Vec::new(); level + 1];
+
+                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
+                *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
+                bvs[level] = bv;
+
+                witnesses[level].push(node.get_batch_witness(0..node.keys.len()));
+                commitments[level].push(node.prover.commitment().unwrap());
+
+                (bvs, witnesses, commitments)
+            }
+        }
+    }
+
+    fn compute_range_edge_proof(
+        &self,
+        is_left: bool,
+        path: &[usize],
+        level: usize,
+    ) -> RangeProofTuple {
+        let idx = path[0];
+        println!("edge({}, {})", idx, is_left);
+        match self {
+            Node::Internal(ref node) => {
+                let (left_idx, right_idx, (mut bvs, mut witnesses, mut commitments)) = match is_left
+                {
+                    true => (
+                        idx + 1,
+                        node.keys.len(),
+                        node.children[idx].compute_range_edge_proof(is_left, &path[1..], level + 1),
+                    ),
+                    false => (
+                        0,
+                        idx + 1,
+                        node.children[idx].compute_range_edge_proof(is_left, &path[1..], level + 1),
+                    ),
+                };
+
+                for i in left_idx..right_idx {
+                    let (subtree_bvs, subtree_witnesses, subtree_commitments) =
+                        node.children[i].compute_subtree_range_proof(level + 1);
+
+                    bvs.iter_mut()
+                        .zip(subtree_bvs.iter())
+                        .for_each(|(dst, src)| dst.extend(src));
+                    witnesses
+                        .iter_mut()
+                        .zip(subtree_witnesses.iter())
+                        .for_each(|(dst, src)| dst.extend_from_slice(src.as_slice()));
+                    commitments
+                        .iter_mut()
+                        .zip(subtree_commitments.iter())
+                        .for_each(|(dst, src)| dst.extend(src));
+                }
+
+                let mut bv = bitvec![0; right_idx - left_idx];
+                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
+                *(bv.as_mut_bitslice().get_mut(right_idx - left_idx - 1).unwrap()) = true;
+
+                bvs[level].extend(bv);
+
+                witnesses[level].push(node.get_batch_witness(left_idx..right_idx));
+                commitments[level].push(node.prover.commitment().unwrap());
+
+                (bvs, witnesses, commitments)
+            }
+            Node::Leaf(ref node) => {
+                let mut bvs = vec![BitVec::new(); level + 1];
+                let mut witnesses = vec![Vec::new(); level + 1];
+                let mut commitments = vec![Vec::new(); level + 1];
+
+                if is_left {
+                    witnesses[level].push(node.get_batch_witness(idx..node.keys.len()));
+                } else {
+                    witnesses[level].push(node.get_batch_witness(0..idx));
+                }
+
+                commitments[level].push(node.prover.commitment().unwrap());
+
+                let mut bv = bitvec![0; node.keys.len()];
+                *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
+                *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
+                bvs[level] = bv;
+
+                match is_left {
+                    true => (bvs, witnesses, commitments),
+                    false => (bvs, witnesses, commitments),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn compute_range_proof(
+        &self,
+        left_path: &[usize],
+        right_path: &[usize],
+        level: usize,
+    ) -> RangeProofTuple {
+        let left = left_path[0];
+        let right = right_path[0];
+        println!("outer({}, {})", left, right);
+
+        match self {
+            Node::Internal(ref node) => {
+                if left == right {
+                    node.children[left].compute_range_proof(
+                        &left_path[1..],
+                        &right_path[1..],
+                        level + 1,
+                    )
+                } else {
+                    let (mut bvs, mut witnesses, mut commitments) = node.children[left]
+                        .compute_range_edge_proof(true, &left_path[1..], level + 1);
+                    let (right_bvs, right_witnesses, right_commitments) = node.children[right]
+                        .compute_range_edge_proof(false, &right_path[1..], level + 1);
+
+                    for i in left..right {
+                        let (subtree_bvs, subtree_witnesses, subtree_commitments) =
+                            node.children[i].compute_subtree_range_proof(level + 1);
+
+                        bvs.iter_mut()
+                            .zip(subtree_bvs.iter())
+                            .for_each(|(dst, src)| dst.extend(src));
+                        witnesses
+                            .iter_mut()
+                            .zip(subtree_witnesses.iter())
+                            .for_each(|(dst, src)| dst.extend_from_slice(src.as_slice()));
+                        commitments
+                            .iter_mut()
+                            .zip(subtree_commitments)
+                            .for_each(|(dst, src)| dst.extend(src));
+                    }
+
+                    bvs.iter_mut()
+                        .zip(right_bvs.iter())
+                        .for_each(|(dst, src)| dst.extend(src));
+                    witnesses
+                        .iter_mut()
+                        .zip(right_witnesses.iter())
+                        .for_each(|(dst, src)| dst.extend_from_slice(src.as_slice()));
+                    commitments
+                        .iter_mut()
+                        .zip(right_commitments)
+                        .for_each(|(dst, src)| dst.extend(src));
+
+                    let mut bv = bitvec![0; node.keys.len()];
+                    *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
+                    *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
+
+                    bvs[level].extend(bv);
+                    witnesses[level].push(node.get_batch_witness(left..(right + 1)));
+                    commitments[level].push(node.prover.commitment().unwrap());
+
+                    (bvs, witnesses, commitments)
                 }
             }
             Node::Leaf(ref node) => {
                 let mut bvs = vec![BitVec::new(); level + 1];
+                let mut commitments = vec![Vec::new(); level + 1];
+                let mut witnesses = vec![Vec::new(); level + 1];
+
                 let mut bv = bitvec![0; node.keys.len()];
                 *(bv.as_mut_bitslice().get_mut(0).unwrap()) = true;
                 *(bv.as_mut_bitslice().get_mut(node.keys.len() - 1).unwrap()) = true;
 
+                witnesses[level].push(node.get_batch_witness(left..(right + 1)));
+                commitments[level].push(node.prover.commitment().unwrap());
                 bvs[level] = bv;
 
-                bvs
+                (bvs, witnesses, commitments)
             }
         }
     }
 
-    pub(crate) fn get_by_path(&self, path: &[usize]) -> (KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN]) {
+    pub(crate) fn get_by_path(
+        &self,
+        path: &[usize],
+    ) -> (KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN]) {
         let idx = path[0];
         match self {
             Node::Internal(node) => node.children[idx].get_by_path(&path[1..]),
-            Node::Leaf(node) => (node.keys[idx].clone(), node.values[idx].clone())
+            Node::Leaf(node) => (node.keys[idx].clone(), node.values[idx].clone()),
         }
     }
 
-    pub(crate) fn advance_path_by_one(&self, path: &mut[usize]) -> Option<(KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN])> {
+    pub(crate) fn advance_path_by_one(
+        &self,
+        path: &mut [usize],
+    ) -> Option<(KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN])> {
         let mut idx = path[0];
         match self {
-            Node::Internal(node) => {
-                loop {
-                    if idx == node.keys.len() {
-                        idx = 0;
-                        path[0] = idx;
-                        break None
-                    }
+            Node::Internal(node) => loop {
+                if idx == node.keys.len() {
+                    idx = 0;
+                    path[0] = idx;
+                    break None;
+                }
 
-                    let res = node.children[idx].advance_path_by_one(&mut path[1..]);
-                    if res.is_some() {
-                        path[0] = idx;
-                        break res
-                    } else {
-                        idx += 1;
-                    }
+                let res = node.children[idx].advance_path_by_one(&mut path[1..]);
+                if res.is_some() {
+                    path[0] = idx;
+                    break res;
+                } else {
+                    idx += 1;
                 }
             },
             Node::Leaf(node) => {
@@ -620,8 +735,8 @@ pub struct InternalNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const
     pub(crate) children: Vec<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>,
     // witnesses are lazily-computed - none if any particular witness hasn't been computed yet.
     pub(crate) witnesses: Vec<Option<KZGWitness<Bls12>>>,
-    pub(crate) batch_witness: Option<KZGBatchWitness<Bls12, Q>>,
-    pub(crate) prover: KZGProver<'params, Bls12, Q>,
+    pub(crate) batch_witness: Option<KZGBatchWitness<Bls12>>,
+    pub(crate) prover: KZGProver<'params, Bls12>,
 }
 
 impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Debug
@@ -641,7 +756,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     InternalNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
 {
     pub(crate) fn new(
-        params: &'params KZGParams<Bls12, Q>,
+        params: &'params KZGParams<Bls12>,
         key: [u8; MAX_KEY_LEN],
         left: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
         right: Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
@@ -685,6 +800,18 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
+    pub(crate) fn get_batch_witness(&self, idxs: Range<usize>) -> KZGBatchWitness<Bls12> {
+        let points: Vec<(Scalar, Scalar)> = idxs
+            .map(|idx| {
+                (
+                    self.keys[idx].field_hash_with_idx(idx).into(),
+                    self.children[idx].hash().unwrap().into(),
+                )
+            })
+            .collect();
+        self.prover.create_witness_batched(points.as_slice()).unwrap()
+    }
+
     pub(crate) fn reinterpolate_and_create_witness(
         &mut self,
         idx: usize,
@@ -711,9 +838,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             .map(|child| child.hash().unwrap().into())
             .collect();
 
-        println!("{}, {}", xs.len(), ys.len());
-
-        let polynomial: Polynomial<Bls12, Q> =
+        let polynomial: Polynomial<Bls12> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
         let commitment = self.prover.commit(polynomial);
         self.witnesses.iter_mut().for_each(|w| *w = None);
@@ -736,7 +861,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         }
     }
 
-    fn get_key_insertion_idx(&self, key: &KeyWithCounter<MAX_KEY_LEN>)-> usize {
+    fn get_key_insertion_idx(&self, key: &KeyWithCounter<MAX_KEY_LEN>) -> usize {
         // find the first key it's less than
         self.keys.partition_point(|k| key >= k)
     }
@@ -997,7 +1122,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                         key: leaf_key,
                         value,
                     } => {
-
                         println!("(edge) is_left: {}, idx: {}", is_left, idx);
                         if is_left && idx > 0 {
                             // if we didn't find it, but we get a left edge and it's not the first key, backtrack
@@ -1126,7 +1250,6 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                             path.push(inner_proof);
                             commitments.push(self.prover.commitment().unwrap());
 
-
                             GetResult::NotFound(NonMembershipProof::Edge {
                                 is_left,
                                 path,
@@ -1161,8 +1284,10 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         // number of keys children[idx] needs to satisfy invariant
         let deficit = Q / 2 - self.children[idx].len();
 
-
-        println!("(merge_child, before) self.keys: {:?}, idx: {}", &self.keys, idx);
+        println!(
+            "(merge_child, before) self.keys: {:?}, idx: {}",
+            &self.keys, idx
+        );
 
         if idx > 0 && self.children[idx - 1].len() - deficit >= Q / 2 {
             println!("0");
@@ -1177,20 +1302,18 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             self.children[idx].reinterpolate();
 
             self.keys[idx] = split_key;
-        } else if idx < self.children.len() - 1
-            && self.children[idx + 1].len() - deficit >= Q / 2
-        {
+        } else if idx < self.children.len() - 1 && self.children[idx + 1].len() - deficit >= Q / 2 {
             println!("1");
             // else if right child has enough keys to spare, move them and update split key
 
             let split_idx = deficit;
-            
+
             let (mut keys, values) = self.children[idx + 1].split_front(split_idx);
 
             keys[0] = self.keys[idx + 1].clone();
             let split_key = match self.children[idx + 1] {
                 Node::Internal(ref mut node) => std::mem::replace(&mut node.keys[0], null_key()),
-                Node::Leaf(ref node) => node.keys[0].clone()
+                Node::Leaf(ref node) => node.keys[0].clone(),
             };
 
             self.children[idx].append(false, keys, values);
@@ -1236,29 +1359,26 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 // so we use children[idx] not children[idx - 1]
                 self.children[idx].merge_from_right(child, key);
 
-
                 self.children[idx].reinterpolate();
             }
-
         }
-        println!("(merge_child, after) self.keys: {:?}, idx: {}", &self.keys, idx);
-
+        
         self.reinterpolate();
 
         self.keys.len() < Q / 2
     }
-
 }
 
 #[derive(Clone)]
-pub struct LeafNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
+pub struct LeafNode<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
+{
     // INVARIANT: children.len() == keys.len()
     pub(crate) keys: Vec<KeyWithCounter<MAX_KEY_LEN>>,
     pub(crate) values: Vec<[u8; MAX_VAL_LEN]>,
     pub(crate) hashes: Vec<Blake3Hash>,
     pub(crate) witnesses: Vec<Option<KZGWitness<Bls12>>>,
-    pub(crate) batch_witness: Option<KZGBatchWitness<Bls12, Q>>,
-    pub(crate) prover: KZGProver<'params, Bls12, Q>,
+    pub(crate) batch_witness: Option<KZGBatchWitness<Bls12>>,
+    pub(crate) prover: KZGProver<'params, Bls12>,
     // no sibling pointers yet
 }
 
@@ -1307,7 +1427,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 {
     /// new *does not* immediately commit
     // for the commitment to occur, you must call commit()
-    pub(crate) fn new(params: &'params KZGParams<Bls12, Q>) -> Self {
+    pub(crate) fn new(params: &'params KZGParams<Bls12>) -> Self {
         LeafNode {
             values: Vec::with_capacity(Q),
             keys: Vec::with_capacity(Q),
@@ -1340,9 +1460,13 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
             .map(|(i, k)| k.field_hash_with_idx(i).into())
             .collect();
 
-        let ys: Vec<Scalar> = self.hashes.iter().map(|&h| FieldHash::from(h).into()).collect();
+        let ys: Vec<Scalar> = self
+            .hashes
+            .iter()
+            .map(|&h| FieldHash::from(h).into())
+            .collect();
 
-        let polynomial: Polynomial<Bls12, Q> =
+        let polynomial: Polynomial<Bls12> =
             Polynomial::lagrange_interpolation(xs.as_slice(), ys.as_slice());
         let commitment = self.prover.commit(polynomial);
         self.witnesses.iter_mut().for_each(|w| *w = None);
@@ -1353,7 +1477,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
         let (commitment, _, _) = self.reinterpolate_inner();
         commitment
     }
-    
+
     fn insert_inner(
         &mut self,
         key: &KeyWithCounter<MAX_KEY_LEN>,
@@ -1370,7 +1494,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
 
         self.keys.insert(idx, key.to_owned());
         self.values.insert(idx, value.to_owned());
-        self.hashes.insert(idx, hash.into());
+        self.hashes.insert(idx, hash);
 
         if self.keys.len() > Q {
             let mid = self.keys.len() / 2;
@@ -1400,7 +1524,7 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
     ) -> (
         KVProof,
         Option<(
-            KeyWithCounter<MAX_KEY_LEN>, 
+            KeyWithCounter<MAX_KEY_LEN>,
             LeafNode<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>,
         )>,
     ) {
@@ -1466,6 +1590,19 @@ impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize
                 .create_witness((x.into(), FieldHash::from(hashes[idx]).into()))
                 .expect("node kv pair not on polynomial!")
         })
+    }
+
+    fn get_batch_witness(&self, idxs: Range<usize>) -> KZGBatchWitness<Bls12> {
+        println!("(leaf) idxs: {:?}, node_size: {:?}", &idxs, self.keys.len());
+        let points: Vec<(Scalar, Scalar)> = idxs
+            .map(|idx| {
+                (
+                    self.keys[idx].field_hash_with_idx(idx).into(),
+                    FieldHash::from(self.hashes[idx]).into(),
+                )
+            })
+            .collect();
+        self.prover.create_witness_batched(points.as_slice()).unwrap()
     }
 
     pub(crate) fn get(

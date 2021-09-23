@@ -1,18 +1,18 @@
 use bitvec::vec::BitVec;
 use blake3::{Hash as Blake3Hash, Hasher as Blake3Hasher};
-use bls12_381::Bls12;
+use bls12_381::{Bls12, Scalar};
 use either::Either;
-use kzg::{KZGCommitment, KZGVerifier, KZGWitness};
+use kzg::{KZGBatchWitness, KZGCommitment, KZGVerifier, KZGWitness};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::node::Node;
 use crate::{null_key, FieldHash, KeyWithCounter};
 
-fn verify_path<'params, const Q: usize, const MAX_KEY_LEN: usize>(
+fn verify_path<'params, const MAX_KEY_LEN: usize>(
     mut prev_child_hash: Option<FieldHash>,
     path: &Vec<InnerNodeProof<MAX_KEY_LEN>>,
     commitments: &Vec<KZGCommitment<Bls12>>,
-    verifier: &KZGVerifier<'params, Bls12, Q>,
+    verifier: &KZGVerifier<'params, Bls12>,
 ) -> (bool, Option<FieldHash>) {
     // verify the audit path
     for i in (0..path.len()).rev() {
@@ -60,11 +60,11 @@ pub struct KVProof {
 }
 
 impl KVProof {
-    pub fn verify<'params, K: AsRef<[u8]>, const Q: usize, const MAX_KEY_LEN: usize>(
+    pub fn verify<'params, K: AsRef<[u8]>, const MAX_KEY_LEN: usize>(
         &self,
         key: &K,
         value_hash: Blake3Hash,
-        verifier: &KZGVerifier<'params, Bls12, Q>,
+        verifier: &KZGVerifier<'params, Bls12>,
     ) -> bool {
         let KVProof {
             idx,
@@ -100,10 +100,10 @@ pub struct InnerNodeProof<const MAX_KEY_LEN: usize> {
 }
 
 impl<const MAX_KEY_LEN: usize> InnerNodeProof<MAX_KEY_LEN> {
-    pub fn verify<'params, const Q: usize>(
+    pub fn verify<'params>(
         &self,
         commitment: &KZGCommitment<Bls12>,
-        verifier: &KZGVerifier<'params, Bls12, Q>,
+        verifier: &KZGVerifier<'params, Bls12>,
     ) -> bool {
         let InnerNodeProof {
             idx,
@@ -135,11 +135,11 @@ pub struct MembershipProof<const MAX_KEY_LEN: usize> {
 }
 
 impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
-    pub fn verify<'params, K: AsRef<[u8]>, const Q: usize>(
+    pub fn verify<'params, K: AsRef<[u8]>>(
         &self,
         key: &K,
         value_hash: Blake3Hash,
-        verifier: &KZGVerifier<'params, Bls12, Q>,
+        verifier: &KZGVerifier<'params, Bls12>,
     ) -> bool {
         let (path_ok, prev_child_hash) = verify_path(None, &self.path, &self.commitments, verifier);
 
@@ -158,7 +158,7 @@ impl<const MAX_KEY_LEN: usize> MembershipProof<MAX_KEY_LEN> {
 
         // verify the leaf
         self.leaf
-            .verify::<'_, K, Q, MAX_KEY_LEN>(key, value_hash, verifier)
+            .verify::<'_, K, MAX_KEY_LEN>(key, value_hash, verifier)
     }
 }
 
@@ -211,10 +211,10 @@ pub enum NonMembershipProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> 
 impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
     NonMembershipProof<MAX_KEY_LEN, MAX_VAL_LEN>
 {
-    pub fn verify<'params, K, const Q: usize>(
+    pub fn verify<'params, K>(
         &self,
         key: &K,
-        verifier: &KZGVerifier<'params, Bls12, Q>,
+        verifier: &KZGVerifier<'params, Bls12>,
     ) -> bool
     where
         K: AsRef<[u8]>,
@@ -296,7 +296,6 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
                 right_path,
                 right_commitments,
             } => {
-                println!("InterNode");
                 if key <= &left_key.0 || key >= &right_key.0 {
                     false
                 } else {
@@ -364,11 +363,11 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
                     }
 
                     // verify leaf proofs
-                    left.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(
+                    left.verify::<'params, [u8; MAX_KEY_LEN], MAX_KEY_LEN>(
                         &left_key.0,
                         blake3::hash(left_value),
                         verifier,
-                    ) && right.verify::<'params, [u8; MAX_KEY_LEN], Q, MAX_KEY_LEN>(
+                    ) && right.verify::<'params, [u8; MAX_KEY_LEN], MAX_KEY_LEN>(
                         &right_key.0,
                         blake3::hash(right_value),
                         verifier,
@@ -385,7 +384,6 @@ impl<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize>
             } => {
                 // TODO is this mathematically correct?
 
-                println!("Edge(is_left: {})", is_left);
                 let mut prev_child_hash: Option<FieldHash> = None;
 
                 if *is_left {
@@ -488,6 +486,8 @@ pub enum RangePath<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
 pub struct RangeProof<const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> {
     pub(crate) left_path: RangePath<MAX_KEY_LEN, MAX_VAL_LEN>,
     pub(crate) right_path: RangePath<MAX_KEY_LEN, MAX_VAL_LEN>,
+    pub(crate) witnesses: Vec<Vec<KZGBatchWitness<Bls12>>>,
+    pub(crate) commitments: Vec<Vec<KZGCommitment<Bls12>>>,
     pub(crate) bitvecs: Vec<BitVec>,
 }
 
@@ -513,14 +513,19 @@ pub struct RangeResult<'params, const Q: usize, const MAX_KEY_LEN: usize, const 
     pub(crate) proof: RangeProof<MAX_KEY_LEN, MAX_VAL_LEN>,
     pub(crate) root: Rc<RefCell<Node<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>>>,
     // when iterating, this gets set
-    pub(crate) current_path: Vec<usize>
+    pub(crate) current_path: Vec<usize>,
 }
 
-impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Iterator for RangeResult<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN> {
+impl<'params, const Q: usize, const MAX_KEY_LEN: usize, const MAX_VAL_LEN: usize> Iterator
+    for RangeResult<'params, Q, MAX_KEY_LEN, MAX_VAL_LEN>
+{
     type Item = (KeyWithCounter<MAX_KEY_LEN>, [u8; MAX_VAL_LEN]);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let res = self.root.borrow().advance_path_by_one(self.current_path.as_mut_slice());
+        let res = self
+            .root
+            .borrow()
+            .advance_path_by_one(self.current_path.as_mut_slice());
 
         res.map_or(None, |(key, val)| {
             if key.0 > self.right {

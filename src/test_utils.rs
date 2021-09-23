@@ -30,7 +30,10 @@ pub(crate) fn assert_is_b_tree_inner<
 
     match node {
         Node::Internal(node) => {
-            println!("(internal) parent key: {:?}, keys: {:?}", &left_parent_key, node.keys);
+            println!(
+                "(internal) parent key: {:?}, keys: {:?}",
+                &left_parent_key, node.keys
+            );
             assert_at_node(
                 node.keys.len() == node.children.len(),
                 &left_parent_key,
@@ -101,7 +104,10 @@ pub(crate) fn assert_is_b_tree_inner<
             });
         }
         Node::Leaf(node) => {
-            println!("(leaf) parent_key: {:?} keys: {:?}", &left_parent_key, node.keys);
+            println!(
+                "(leaf) parent_key: {:?} keys: {:?}",
+                &left_parent_key, node.keys
+            );
             if let (None, None) = (&left_parent_key, &right_parent_key) {
                 // if the root is a leaf, then there's no contraints on number of keys
                 return;
